@@ -1,6 +1,6 @@
 # 🖥️ Pi Wall Panel Kiosk
 
-A zero-touch setup script for turning a Raspberry Pi into a wall-mounted display kiosk. Automatically detects your hardware and OS and configures everything accordingly.
+A zero-touch setup script for turning a Raspberry Pi into a wall-mounted display kiosk. Automatically detects your hardware, OS, and RTC availability and configures everything accordingly.
 
 ## Compatibility
 
@@ -8,36 +8,6 @@ A zero-touch setup script for turning a Raspberry Pi into a wall-mounted display
 |---|---|---|
 | **Bookworm** (Debian 12) — X11 + LXDE | ✅ | ✅ |
 | **Trixie** (Debian 13) — Wayland + labwc | ✅ | ✅ |
-
-The script detects your OS and Pi model at runtime and branches automatically — no manual configuration needed for compatibility.
-
----
-
-## Features
-
-- **Auto-detection** — detects OS (Bookworm/Trixie), compositor (X11/Wayland), and Pi model (4/5) at runtime
-- **Full kiosk mode** — Chromium launches fullscreen with no address bar, no UI chrome, no escape
-- **Dark mode** — forced at OS level (GTK 3 + 4), compositor level, and Chromium level (`--force-dark-mode` + `WebContentsForceDark`)
-- **No desktop flash** — black background painted before Chromium loads (Trixie: `swaybg`; Bookworm: `xsetroot` + LXDE desktop color)
-- **Crash recovery** — watchdog loop automatically relaunches Chromium on unexpected exit
-- **Network-aware boot** — waits up to 30s for the URL to be reachable before launching (no blank screen on cold boot)
-- **Scheduled shutdown** — cron shuts the Pi down at a configurable time nightly
-- **RTC wake alarm** — Pi 5 uses the built-in RTC; Pi 4 uses an external RTC module (e.g. DS3231)
-- **Hardware watchdog** — Pi reboots itself if the kernel hangs for more than 15 seconds
-- **Touch controls locked** — pinch-to-zoom, overscroll, and pull-to-refresh disabled
-- **All infobars suppressed** — no crash restore prompts, no save-password bubbles, no translate bar, no notifications
-- **Idempotent URL updates** — `--update-url` flag changes the displayed URL without reinstalling anything
-- **Wi-Fi power-save disabled** — prevents random network drops
-- **Log rotation** — activity logged to `/var/log/kiosk.log` with weekly rotation
-
----
-
-## Requirements
-
-- Raspberry Pi 4 or Raspberry Pi 5
-- Raspberry Pi OS **Bookworm** or **Trixie** — desktop variant (not Lite)
-- Internet connection during setup
-- **Pi 4 only:** External RTC module (e.g. DS3231) if you need the hardware wake alarm
 
 ---
 
@@ -53,88 +23,173 @@ sudo reboot
 
 ---
 
+## Usage
+
+```bash
+# Full install
+sudo bash kiosk-setup.sh https://your-dashboard.com
+
+# Update URL only — no reinstall, safe to run anytime
+sudo bash kiosk-setup.sh --update-url https://new-url.com
+
+# Enable RTC shutdown/wake after adding RTC hardware
+sudo bash kiosk-setup.sh --enable-rtc
+```
+
+---
+
+## Features
+
+- **Auto-detection** — detects OS (Bookworm/Trixie), compositor (X11/Wayland), and Pi model (4/5) at runtime
+- **RTC detection** — probes hardware directly; gracefully disables shutdown/wake if no RTC is present with clear instructions to re-enable later
+- **Full kiosk mode** — Chromium launches fullscreen with no address bar, no UI chrome, no escape
+- **Dark mode** — forced at OS (GTK 3+4), compositor, and Chromium level (`--force-dark-mode` + `WebContentsForceDark`)
+- **No desktop flash** — black background before Chromium loads (Trixie: `swaybg`; Bookworm: `xsetroot` + LXDE desktop color)
+- **Crash recovery** — watchdog loop automatically relaunches Chromium on unexpected exit
+- **Network-aware boot** — waits up to 30s for the URL to be reachable before launching
+- **On-screen keyboard** — optional; `wvkbd` (Trixie/Wayland) or `onboard` (Bookworm/X11), toggled via `ENABLE_OSK`
+- **Scheduled shutdown + RTC wake** — configurable times; only active when RTC hardware is confirmed present
+- **Hardware watchdog** — Pi reboots itself if the kernel hangs for more than 15 seconds
+- **Touch controls locked** — pinch-to-zoom, overscroll, and pull-to-refresh all disabled
+- **All infobars suppressed** — no crash prompts, save-password bubbles, translate bar, or notifications
+- **Wi-Fi power-save disabled** — prevents random network drops
+- **Log rotation** — activity logged to `/var/log/kiosk.log` with weekly rotation
+
+---
+
 ## Configuration
 
-All settings are grouped at the top of `kiosk-setup.sh` under the **CONFIG** banner.
+All settings are at the top of `kiosk-setup.sh` under the **CONFIG** banner.
 
 | Variable | Default | Description |
 |---|---|---|
 | `KIOSK_URL` | `https://example.com` | URL to display (also set via argument) |
-| `SHUTDOWN_HOUR` | `0` | Hour to shut down (24h) |
-| `SHUTDOWN_MINUTE` | `0` | Minute to shut down |
-| `WAKE_HOUR` | `6` | Hour to wake via RTC (24h) |
-| `WAKE_MINUTE` | `0` | Minute to wake |
+| `SHUTDOWN_HOUR` | `0` | Hour to shut down (24h) — requires RTC |
+| `SHUTDOWN_MINUTE` | `0` | Minute to shut down — requires RTC |
+| `WAKE_HOUR` | `6` | Hour to wake (24h) — requires RTC |
+| `WAKE_MINUTE` | `0` | Minute to wake — requires RTC |
+| `ENABLE_OSK` | `false` | Enable on-screen keyboard (`true`/`false`) |
 | `DISPLAY_TRANSFORM` | `normal` | Rotation: `normal`, `90`, `180`, `270` *(Trixie only)* |
 | `DISPLAY_OUTPUT` | `HDMI-A-1` | Wayland output name *(Trixie only)* |
 | `AUTO_RELOAD_SECONDS` | `0` | Reload page every N seconds (`0` = disabled) |
-
-### Finding your Wayland display output name (Trixie only)
-
-```bash
-wlr-randr
-```
-
-Common values: `HDMI-A-1`, `HDMI-A-2`, `DSI-1` (official Pi touchscreen).
-
----
-
-## Updating the URL
-
-Safe to run at any time — only touches the autostart file, no reinstall:
-
-```bash
-sudo bash kiosk-setup.sh --update-url https://new-dashboard.com
-sudo reboot
-```
-
-This is the recommended workflow when IP addresses or hostnames change after a network reconfiguration.
 
 ---
 
 ## RTC Wake Alarm
 
-The nightly shutdown script writes a wake epoch to the RTC before powering down, so the Pi starts itself at the configured time without any external timer or smart plug.
+The script **probes the RTC hardware directly** at install time rather than assuming it exists. If no RTC is detected, shutdown/wake scheduling is skipped and a clear warning is shown.
+
+### What counts as "detected"
+
+All three of these must pass:
+1. `/sys/class/rtc/rtc0/wakealarm` exists
+2. `hwclock -r` succeeds (clock is readable)
+3. The wakealarm sysfs node is writable
 
 ### Pi 5 — built-in RTC
 
-```bash
-sudo hwclock -r              # verify the hardware clock
-sudo hwclock --systohc       # sync system time → RTC (do after NTP sync)
-```
-
-### Pi 4 — external RTC module required
-
-Tested with DS3231. Enable in `/boot/firmware/config.txt`:
-```
-dtoverlay=i2c-rtc,ds3231
-```
-Then:
-```bash
-sudo hwclock -r
-sudo hwclock --systohc
-```
-
-### Test the shutdown/wake cycle
+The Pi 5 has a built-in RTC, but it requires a CR2032 battery on the board and an initial time sync before the wakealarm becomes writable.
 
 ```bash
-sudo /usr/local/bin/kiosk-shutdown.sh
+sudo hwclock --systohc        # sync system time → RTC
+sudo bash kiosk-setup.sh --enable-rtc
 ```
 
-The Pi will shut down and wake at the next scheduled wake time.
+### Pi 4 — external RTC module (e.g. DS3231)
+
+1. Wire the module: `SDA→GPIO2`, `SCL→GPIO3`, `VCC→3.3V`, `GND→GND`
+2. Add to `/boot/firmware/config.txt`:
+   ```
+   dtoverlay=i2c-rtc,ds3231
+   ```
+3. Reboot, then:
+   ```bash
+   sudo hwclock --systohc
+   sudo bash kiosk-setup.sh --enable-rtc
+   ```
+
+### Re-enabling after adding hardware
+
+If the RTC wasn't present during the original install, run this after setting up the hardware:
+
+```bash
+sudo bash kiosk-setup.sh --enable-rtc
+```
+
+This writes the shutdown script and cron job without touching any other kiosk configuration.
+
+---
+
+## On-Screen Keyboard
+
+Set `ENABLE_OSK=true` in `kiosk-setup.sh` before running, then re-run the install. The keyboard appears automatically when a text input field is tapped in Chromium.
+
+| OS | Package | Notes |
+|---|---|---|
+| Trixie (Wayland) | `wvkbd` | Native Wayland OSK; uses input-method protocol; appears/dismisses automatically |
+| Bookworm (X11) | `onboard` | X11 OSK; Blackboard theme to match dark mode; 4s startup delay |
+
+Both integrate with Chromium's `--enable-virtual-keyboard` flag so the browser signals the OSK when a text field gains focus.
+
+> **Note:** In kiosk mode, the OSK will not appear for Chromium's own URL bar (which is hidden anyway). It only appears for text inputs within the webpage being displayed.
+
+---
+
+## Updating the URL
+
+```bash
+sudo bash kiosk-setup.sh --update-url https://new-dashboard.com
+sudo reboot   # or: sudo pkill chromium
+```
+
+The watchdog loop will relaunch Chromium with the new URL automatically after `pkill`.
 
 ---
 
 ## OS / Compositor Differences
 
-| | Bookworm (X11 + LXDE) | Trixie (Wayland + labwc) |
+| | Bookworm (X11) | Trixie (Wayland) |
 |---|---|---|
 | Chromium package | `chromium-browser` | `chromium` |
 | Autostart location | `~/.config/lxsession/LXDE-pi/autostart` | `~/.config/labwc/autostart` |
 | Cursor hiding | `unclutter` | labwc `rc.xml` timeout |
-| Screen blanking | `xset s off` / Xorg config | systemd inhibitor service |
+| Screen blanking | `xset s off` + Xorg config | systemd inhibitor service |
 | Black background | `xsetroot` + LXDE desktop color | `swaybg -c 000000` |
-| Display rotation | Not supported (Bookworm uses X11 RandR) | `wlr-randr` |
+| Display rotation | X11 RandR (not scripted) | `wlr-randr` |
 | GPU overlay | `vc4-fkms-v3d` (Pi 4) / `vc4-kms-v3d` (Pi 5) | `vc4-kms-v3d` |
+| OSK | `onboard` | `wvkbd` |
+
+---
+
+## Troubleshooting
+
+**RTC not detected after setup**
+```bash
+sudo bash kiosk-setup.sh --enable-rtc    # shows detailed diagnostics
+sudo hwclock -r                           # check if clock is readable
+cat /sys/class/rtc/rtc0/wakealarm        # check sysfs node
+```
+
+**Screen goes blank**
+- Trixie: `systemctl --user status kiosk-inhibit.service`
+- Bookworm: confirm `xset -dpms` is in the autostart
+
+**Desktop flash before Chromium**
+- Trixie: `pgrep swaybg`
+- Bookworm: check `~/.config/pcmanfm/LXDE-pi/desktop-items-0.conf`
+
+**Chromium keeps crashing**
+```bash
+tail -f /var/log/kiosk.log
+```
+
+**OSK not appearing**
+- Trixie: `pgrep wvkbd` — confirm it's running
+- Bookworm: `pgrep onboard` — confirm it's running
+- Ensure `--enable-virtual-keyboard` is in the Chromium flags (set automatically when `ENABLE_OSK=true`)
+
+**URL unreachable on boot**
+Increase `MAX_WAIT` in `~/.config/labwc/autostart` (Trixie) or the autostart bash block (Bookworm).
 
 ---
 
@@ -142,65 +197,31 @@ The Pi will shut down and wake at the next scheduled wake time.
 
 ```
 ha-pi-dashboard/
-├── kiosk-setup.sh       # Main setup script
+├── kiosk-setup.sh
 └── README.md
 
-After install (created on the Pi):
+After install (on the Pi):
 
 Trixie:
-~/.config/labwc/
-├── autostart            # Session launcher + crash watchdog
-├── environment          # Wayland env vars (dark mode, ozone)
-└── rc.xml               # Compositor config (cursor, keybindings)
+~/.config/labwc/autostart              Launcher + crash watchdog
+~/.config/labwc/environment            Dark mode env vars
+~/.config/labwc/rc.xml                 Cursor hiding, keybindings
+~/.config/systemd/user/kiosk-inhibit.service
 
 Bookworm:
-~/.config/lxsession/LXDE-pi/
-└── autostart            # LXDE session launcher + crash watchdog
-~/.config/pcmanfm/LXDE-pi/
-└── desktop-items-0.conf # Black desktop background
+~/.config/lxsession/LXDE-pi/autostart
+~/.config/pcmanfm/LXDE-pi/desktop-items-0.conf
 
 Both:
-~/.config/gtk-3.0/settings.ini        # GTK dark theme
-~/.config/gtk-4.0/settings.ini        # GTK4 dark theme
-~/.config/systemd/user/
-└── kiosk-inhibit.service             # Idle/blank inhibitor (Trixie)
-/usr/local/bin/kiosk-shutdown.sh      # Nightly shutdown + RTC wake
-/etc/kiosk-installed                  # Install marker (enables --update-url)
-/var/log/kiosk.log                    # Runtime log
+~/.config/gtk-3.0/settings.ini
+~/.config/gtk-4.0/settings.ini
+/usr/local/bin/kiosk-shutdown.sh       (only if RTC detected)
+/etc/kiosk-installed                   Install marker
+/var/log/kiosk.log
 ```
-
----
-
-## Troubleshooting
-
-**Desktop flash before Chromium loads**
-- Trixie: confirm `swaybg` is running: `pgrep swaybg`
-- Bookworm: check `~/.config/pcmanfm/LXDE-pi/desktop-items-0.conf` has `desktop_bg=#000000`
-
-**Screen goes blank / turns off**
-- Trixie: `systemctl --user status kiosk-inhibit.service`
-- Bookworm: confirm `xset -dpms` and `xset s off` are in the autostart
-
-**Pi doesn't wake at the right time**
-```bash
-cat /sys/class/rtc/rtc0/wakealarm    # should show a Unix timestamp
-sudo hwclock -r                       # confirm hardware clock is correct
-```
-
-**Chromium keeps crashing**
-```bash
-tail -f /var/log/kiosk.log
-```
-
-**URL unreachable on boot**
-The network wait retries for 30 seconds. Increase `MAX_WAIT` in the autostart file if your network takes longer.
-
-**Wrong display rotation (Trixie)**
-Find your output name: `wlr-randr`
-Update `DISPLAY_OUTPUT` and `DISPLAY_TRANSFORM` in the script, then re-run.
 
 ---
 
 ## License
 
-MIT — do whatever you want with it.
+MIT
