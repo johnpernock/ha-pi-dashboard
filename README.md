@@ -54,6 +54,9 @@ sudo bash kiosk-setup.sh https://your-dashboard.com
 # Update the displayed URL — no reinstall, safe to run anytime
 sudo bash kiosk-setup.sh --update-url https://new-url.com
 
+# Update the HA long-lived access token — no reinstall
+sudo bash kiosk-setup.sh --set-token YOUR_NEW_TOKEN
+
 # Enable RTC scheduled shutdown/wake after adding RTC hardware
 sudo bash kiosk-setup.sh --enable-rtc
 ```
@@ -321,6 +324,8 @@ HA → Settings → People → click your user → copy the ID from the browser 
 **After editing:**
 HA → Developer Tools → Check Configuration → Restart HA
 
+> **Rotating your token?** Use `--set-token` to update the wrapper page without reinstalling — see [Updating the Token](#updating-the-token) below.
+
 > The script auto-detects your local subnet from the Pi's default route and prints the exact YAML block during install — you can copy it directly.
 
 ---
@@ -358,6 +363,19 @@ Trusted Networks handles auth at the HA server level. The wrapper page handles i
 - HA is updated and changes localStorage key format (Trusted Networks recovers)
 
 **To enable both:** set `HA_AUTO_LOGIN=true`, `HA_URL`, `HA_TOKEN`, and `HA_DASHBOARD_PATH` in the config block, then run the install. The Trusted Networks YAML is printed at the end for you to copy into HA.
+
+---
+
+### Updating the Token
+
+When a long-lived token expires or you rotate it for security, update it without reinstalling:
+
+```bash
+sudo bash kiosk-setup.sh --set-token YOUR_NEW_LONG_LIVED_TOKEN
+sudo pkill chromium   # watchdog relaunches with the new token automatically
+```
+
+This replaces the token in `~/kiosk-ha-login.html` only. No other configuration is touched.
 
 ---
 

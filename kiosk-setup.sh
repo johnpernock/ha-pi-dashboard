@@ -19,8 +19,11 @@
 #    Full install:
 #      sudo bash kiosk-setup.sh https://your-dashboard.com
 #
-#    Update URL only (no reinstall):
+#    Update displayed URL (no reinstall):
 #      sudo bash kiosk-setup.sh --update-url https://new-url.com
+#
+#    Update HA long-lived access token (no reinstall):
+#      sudo bash kiosk-setup.sh --set-token YOUR_TOKEN
 #
 #    Enable RTC shutdown/wake after adding hardware:
 #      sudo bash kiosk-setup.sh --enable-rtc
@@ -112,7 +115,7 @@ SHUTDOWN_MINUTE_PAD=$(printf '%02d' "$SHUTDOWN_MINUTE")
 WAKE_MINUTE_PAD=$(printf '%02d' "$WAKE_MINUTE")
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--update-url|--enable-rtc] <args>"
+[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--update-url|--set-token|--enable-rtc] <args>"
 command -v raspi-config &>/dev/null || err "This doesn't look like a Raspberry Pi. Aborting."
 
 # =============================================================================
@@ -464,10 +467,47 @@ if [[ "$1" == "--update-url" ]]; then
 fi
 
 # =============================================================================
+#  --set-token — update the HA long-lived access token without reinstalling
+# =============================================================================
+if [[ "$1" == "--set-token" ]]; then
+    NEW_TOKEN="${2:-}"
+    [[ -z "$NEW_TOKEN" ]]        && err "Usage: sudo bash $0 --set-token YOUR_LONG_LIVED_TOKEN"
+    [[ ! -f "$INSTALL_MARKER" ]] && err "Kiosk not yet installed. Run a full install first."
+
+    # Check HA auto-login was enabled during install
+    if ! grep -q "^HA_AUTO_LOGIN=true" "$INSTALL_MARKER" 2>/dev/null; then
+        err "HA auto-login was not enabled during install. Re-run the full install with HA_AUTO_LOGIN=true."
+    fi
+
+    WRAPPER="$KIOSK_HOME/kiosk-ha-login.html"
+    [[ ! -f "$WRAPPER" ]] && err "Wrapper page not found at $WRAPPER. Re-run the full install with HA_AUTO_LOGIN=true and a token set."
+
+    hr; banner "  HA Token Update"; hr; echo ""
+    info "Updating long-lived access token in: $WRAPPER"
+
+    # Replace the TOKEN assignment line inside the wrapper page JS
+    sed -i "s|var TOKEN     = \".*\";|var TOKEN     = \"$NEW_TOKEN\";|" "$WRAPPER"
+
+    if grep -q "$NEW_TOKEN" "$WRAPPER"; then
+        log "Token updated successfully"
+    else
+        err "Token replacement failed — check $WRAPPER manually."
+    fi
+
+    echo ""
+    warn "Restart Chromium to apply (watchdog relaunches automatically):"
+    echo "    sudo pkill chromium"
+    echo "  — or reboot:"
+    echo "    sudo reboot"
+    echo ""
+    exit 0
+fi
+
+# =============================================================================
 #  Full install
 # =============================================================================
 [[ "$1" != "https://"* && "$1" != "http://"* && -n "$1" ]] && \
-    err "Unknown argument: '$1'. Did you mean --update-url or --enable-rtc?"
+    err "Unknown argument: '$1'. Did you mean --update-url, --set-token, or --enable-rtc?"
 [[ -z "$1" ]] && warn "No URL supplied — defaulting to https://example.com"
 
 hr
