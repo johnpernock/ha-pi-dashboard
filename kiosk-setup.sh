@@ -1,63 +1,58 @@
 #!/bin/bash
 # =============================================================================
-#  kiosk-setup.sh — Wall Panel Kiosk for Raspberry Pi OS Trixie (Debian 13)
+#  kiosk-setup.sh — Wall Panel Kiosk for Raspberry Pi
 # =============================================================================
+#  Supports:
+#    Hardware : Raspberry Pi 4, Raspberry Pi 5
+#    OS       : Raspberry Pi OS Bookworm (Debian 12) — X11 + LXDE
+#               Raspberry Pi OS Trixie  (Debian 13) — Wayland + labwc
+#
 #  FULL INSTALL:
 #    sudo bash kiosk-setup.sh https://your-dashboard.com
 #
-#  UPDATE URL ONLY (no reinstall, safe to run anytime):
-#    sudo bash kiosk-setup.sh --update-url https://your-new-dashboard.com
+#  UPDATE URL ONLY (safe to run anytime, no reinstall):
+#    sudo bash kiosk-setup.sh --update-url https://your-new-url.com
 #
 #  Features:
-#    - Wayland + labwc compositor (Trixie default)
-#    - Chromium kiosk mode with dark mode forced (OS + browser level)
-#    - All infobars / notifications / crash bubbles suppressed
-#    - Pinch-to-zoom and touch scroll overrides disabled
-#    - Cursor hidden, screen blanking disabled
-#    - Configurable shutdown time and RTC wake time
-#    - Hardware watchdog enabled (auto-reboot on kernel hang)
-#    - Chromium crash watchdog (auto-restarts browser if it dies)
-#    - Network wait before launching Chromium (avoids blank-on-boot)
-#    - Idempotent — safe to re-run to change URL or adjust settings
-#    - All activity logged to /var/log/kiosk.log with weekly rotation
+#    - Auto-detects OS (Bookworm/Trixie) and Pi model (4/5)
+#    - Full kiosk mode — no address bar, no UI chrome, no escape
+#    - Dark mode forced at OS + browser level
+#    - No desktop flash — black background painted before Chromium loads
+#    - Chromium crash watchdog — auto-restarts on unexpected exit
+#    - Network-aware boot — waits for URL to be reachable before launching
+#    - Configurable shutdown time + RTC hardware wake alarm
+#    - Hardware watchdog — Pi reboots if kernel hangs > 15s
+#    - Touch zoom, overscroll, infobars all disabled
+#    - Idempotent URL update mode (--update-url)
+#    - All activity logged to /var/log/kiosk.log
 # =============================================================================
 
 set -e
 
 # =============================================================================
-#  ██████╗  ██████╗ ███╗   ██╗███████╗██╗ ██████╗
-#  ██╔════╝██╔═══██╗████╗  ██║██╔════╝██║██╔════╝
-#  ██║     ██║   ██║██╔██╗ ██║█████╗  ██║██║  ███╗
-#  ██║     ██║   ██║██║╚██╗██║██╔══╝  ██║██║   ██║
-#  ╚██████╗╚██████╔╝██║ ╚████║██║     ██║╚██████╔╝
-#   ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝     ╚═╝ ╚═════╝
-#  Edit these variables before running the script.
+#  CONFIG — edit these before running
 # =============================================================================
 
-# ── URL to display in the kiosk ───────────────────────────────────────────────
-KIOSK_URL="${2:-https://example.com}"
+# URL to display (also accepted as first argument)
+KIOSK_URL="${1:-https://example.com}"
 
-# ── Daily shutdown time (24-hour format) ─────────────────────────────────────
-SHUTDOWN_HOUR=0       # 0  = midnight
-SHUTDOWN_MINUTE=0     # 0  = on the hour
+# Shutdown time (24h)
+SHUTDOWN_HOUR=0
+SHUTDOWN_MINUTE=0
 
-# ── Daily RTC wake/startup time (24-hour format) ─────────────────────────────
-WAKE_HOUR=6           # 6  = 6 AM
-WAKE_MINUTE=0         # 0  = on the hour
+# RTC wake time (24h)
+WAKE_HOUR=6
+WAKE_MINUTE=0
 
-# ── Display rotation (uncomment one if needed) ────────────────────────────────
-# DISPLAY_TRANSFORM="normal"   # default landscape
-# DISPLAY_TRANSFORM="90"       # portrait — rotated right
-# DISPLAY_TRANSFORM="180"      # upside-down landscape
-# DISPLAY_TRANSFORM="270"      # portrait — rotated left
+# Display rotation: normal | 90 | 180 | 270
 DISPLAY_TRANSFORM="normal"
 
-# ── Display output name (run `wlr-randr` after boot to find yours) ────────────
-# Common values: HDMI-A-1, HDMI-A-2, DSI-1 (official Pi touchscreen)
+# Wayland output name — run `wlr-randr` after boot to find yours
+# Common: HDMI-A-1, HDMI-A-2, DSI-1 (Pi touchscreen)
+# Only used on Trixie/Wayland
 DISPLAY_OUTPUT="HDMI-A-1"
 
-# ── Chromium reload interval in seconds (0 = never auto-reload) ──────────────
-#    Useful for dashboards that don't self-refresh
+# Auto-reload interval in seconds (0 = disabled)
 AUTO_RELOAD_SECONDS=0
 
 # =============================================================================
@@ -73,227 +68,305 @@ hr()   { echo -e "${CYAN}━━━━━━━━━━━━━━━━━━�
 
 KIOSK_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 KIOSK_HOME="/home/$KIOSK_USER"
-LABWC_DIR="$KIOSK_HOME/.config/labwc"
 INSTALL_MARKER="/etc/kiosk-installed"
 
-# ── Validate args ─────────────────────────────────────────────────────────────
+# ── Pre-flight ────────────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && err "Must be run as root.  Try: sudo bash $0 [--update-url] <URL>"
+command -v raspi-config &>/dev/null || err "This doesn't look like a Raspberry Pi. Aborting."
 
-UPDATE_ONLY=false
-if [[ "$1" == "--update-url" ]]; then
-    UPDATE_ONLY=true
-    KIOSK_URL="${2:-}"
-    [[ -z "$KIOSK_URL" ]] && err "No URL provided.  Usage: sudo bash $0 --update-url https://new-url.com"
-    [[ ! -f "$INSTALL_MARKER" ]] && err "Kiosk not yet installed. Run without --update-url first."
+# ── OS detection ──────────────────────────────────────────────────────────────
+OS_CODENAME=$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
+
+case "$OS_CODENAME" in
+    trixie)
+        IS_TRIXIE=true
+        IS_BOOKWORM=false
+        COMPOSITOR="Wayland + labwc"
+        CHROMIUM_PKG="chromium"
+        ;;
+    bookworm)
+        IS_TRIXIE=false
+        IS_BOOKWORM=true
+        COMPOSITOR="X11 + LXDE"
+        CHROMIUM_PKG="chromium-browser"
+        ;;
+    *)
+        err "Unsupported OS: $OS_CODENAME. This script supports Bookworm and Trixie only."
+        ;;
+esac
+
+# ── Pi model detection ────────────────────────────────────────────────────────
+PI_MODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "Unknown")
+if echo "$PI_MODEL" | grep -q "Raspberry Pi 5"; then
+    PI_GEN=5
+    HAS_BUILTIN_RTC=true
+elif echo "$PI_MODEL" | grep -q "Raspberry Pi 4"; then
+    PI_GEN=4
+    HAS_BUILTIN_RTC=false
 else
-    KIOSK_URL="${1:-https://example.com}"
-    [[ -z "$1" ]] && warn "No URL supplied — defaulting to https://example.com"
+    PI_GEN="Unknown"
+    HAS_BUILTIN_RTC=false
+    warn "Could not detect Pi model — assuming Pi 4 behaviour."
+fi
+
+# ── Autostart path differs by compositor ─────────────────────────────────────
+if $IS_TRIXIE; then
+    AUTOSTART_DIR="$KIOSK_HOME/.config/labwc"
+    AUTOSTART_FILE="$AUTOSTART_DIR/autostart"
+else
+    AUTOSTART_DIR="$KIOSK_HOME/.config/lxsession/LXDE-pi"
+    AUTOSTART_FILE="$AUTOSTART_DIR/autostart"
 fi
 
 # =============================================================================
 #  URL-only update path — fast, no reinstall
 # =============================================================================
-if [[ "$UPDATE_ONLY" == true ]]; then
+if [[ "$1" == "--update-url" ]]; then
+    UPDATE_URL="${2:-}"
+    [[ -z "$UPDATE_URL" ]] && err "No URL provided.  Usage: sudo bash $0 --update-url https://new-url.com"
+    [[ ! -f "$INSTALL_MARKER" ]] && err "Kiosk not yet installed. Run without --update-url first."
+
     hr
     echo -e "${CYAN}  Kiosk URL Update${NC}"
     hr
-    info "Updating URL to: $KIOSK_URL"
+    info "Updating URL → $UPDATE_URL"
 
-    AUTOSTART="$LABWC_DIR/autostart"
-    [[ ! -f "$AUTOSTART" ]] && err "Autostart file not found at $AUTOSTART"
+    [[ ! -f "$AUTOSTART_FILE" ]] && err "Autostart file not found at $AUTOSTART_FILE"
 
-    # Replace the URL on the last non-empty, non-comment line (the URL line)
-    # Uses a sentinel comment we embed during install
-    sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=$KIOSK_URL|" "$AUTOSTART"
+    # The sentinel line is written the same way for both compositors
+    sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=$UPDATE_URL|" "$AUTOSTART_FILE"
+    sed -i "s|^URL=.*|URL=$UPDATE_URL|" "$INSTALL_MARKER"
 
-    # Also update the stored URL in the marker file
-    sed -i "s|^URL=.*|URL=$KIOSK_URL|" "$INSTALL_MARKER"
-
-    log "URL updated in $AUTOSTART"
+    log "URL updated in $AUTOSTART_FILE"
     echo ""
-    warn "Restart Chromium to apply (or just reboot):"
-    echo "    sudo pkill chromium && sudo -u $KIOSK_USER WAYLAND_DISPLAY=wayland-1 chromium ... &"
-    echo "  — or simply:"
-    echo "    sudo reboot"
+    warn "Reboot to apply:  sudo reboot"
+    echo "  — or kill Chromium and it will relaunch automatically:"
+    echo "    sudo pkill chromium"
     echo ""
     exit 0
 fi
 
 # =============================================================================
-#  Full install path
+#  Full install
 # =============================================================================
+[[ -z "$1" ]] && warn "No URL supplied — defaulting to https://example.com"
+
 hr
-echo -e "${CYAN}  Raspberry Pi Wall Panel Kiosk Setup (Trixie)${NC}"
+echo -e "${CYAN}  Raspberry Pi Wall Panel Kiosk Setup${NC}"
 hr
+info "Pi model    : $PI_MODEL"
+info "OS          : $OS_CODENAME (Debian $(grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '"'))"
+info "Compositor  : $COMPOSITOR"
 info "Kiosk user  : $KIOSK_USER"
 info "Kiosk URL   : $KIOSK_URL"
-info "Compositor  : Wayland + labwc"
-info "Dark mode   : Forced (OS + browser)"
-info "Shutdown    : Daily at ${SHUTDOWN_HOUR}:$(printf '%02d' $SHUTDOWN_MINUTE)"
-info "Wake        : Daily at ${WAKE_HOUR}:$(printf '%02d' $WAKE_MINUTE) (RTC)"
+info "Shutdown    : ${SHUTDOWN_HOUR}:$(printf '%02d' $SHUTDOWN_MINUTE) daily"
+info "Wake        : ${WAKE_HOUR}:$(printf '%02d' $WAKE_MINUTE) daily (RTC)"
+$HAS_BUILTIN_RTC && info "RTC         : Built-in (Pi 5)" \
+                 || info "RTC         : External module required (Pi 4)"
 echo ""
 
-command -v raspi-config &>/dev/null || err "This doesn't look like a Raspberry Pi. Aborting."
-
-# ── 1. Install dependencies ───────────────────────────────────────────────────
+# ── 1. Packages ───────────────────────────────────────────────────────────────
 log "Updating package list..."
 apt-get update -qq
 
-log "Installing packages..."
-apt-get install -y -qq \
-    chromium \
-    cage \
-    wlr-randr \
-    swaybg \
-    util-linux \
-    xdg-utils \
-    curl \
-    jq
+if $IS_TRIXIE; then
+    log "Installing packages (Trixie/Wayland)..."
+    apt-get install -y -qq \
+        "$CHROMIUM_PKG" \
+        cage \
+        wlr-randr \
+        swaybg \
+        util-linux \
+        xdg-utils \
+        curl \
+        jq
+else
+    log "Installing packages (Bookworm/X11)..."
+    apt-get install -y -qq \
+        "$CHROMIUM_PKG" \
+        unclutter \
+        xdotool \
+        x11-xserver-utils \
+        util-linux \
+        curl \
+        jq
+fi
 
-# ── 2. GPU overlay — keep vc4-kms-v3d for Wayland ────────────────────────────
+# ── 2. GPU overlay ────────────────────────────────────────────────────────────
 RASPI_CONFIG_FILE=/boot/firmware/config.txt
 if [[ -f "$RASPI_CONFIG_FILE" ]]; then
-    if grep -q "dtoverlay=vc4-fkms-v3d" "$RASPI_CONFIG_FILE"; then
-        sed -i 's/dtoverlay=vc4-fkms-v3d/dtoverlay=vc4-kms-v3d/' "$RASPI_CONFIG_FILE"
-        log "GPU overlay: vc4-fkms-v3d → vc4-kms-v3d (Wayland requires full KMS)"
+    if $IS_TRIXIE; then
+        # Trixie/Wayland needs full KMS — ensure fkms is NOT set
+        if grep -q "dtoverlay=vc4-fkms-v3d" "$RASPI_CONFIG_FILE"; then
+            sed -i 's/dtoverlay=vc4-fkms-v3d/dtoverlay=vc4-kms-v3d/' "$RASPI_CONFIG_FILE"
+            log "GPU overlay: fkms → kms (Wayland requires full KMS)"
+        else
+            log "GPU overlay: vc4-kms-v3d already set"
+        fi
     else
-        log "GPU overlay vc4-kms-v3d already active"
+        # Bookworm/X11 — fkms is more stable for X11 on Pi 4; Pi 5 always uses kms
+        if [[ $PI_GEN -eq 5 ]]; then
+            log "GPU overlay: Pi 5 uses kms natively — no change needed"
+        else
+            if grep -q "dtoverlay=vc4-kms-v3d" "$RASPI_CONFIG_FILE" && \
+               ! grep -q "dtoverlay=vc4-fkms-v3d" "$RASPI_CONFIG_FILE"; then
+                sed -i 's/dtoverlay=vc4-kms-v3d/dtoverlay=vc4-fkms-v3d/' "$RASPI_CONFIG_FILE"
+                log "GPU overlay: kms → fkms (better X11 stability on Pi 4)"
+            else
+                log "GPU overlay: already appropriate for X11"
+            fi
+        fi
     fi
 else
-    warn "/boot/firmware/config.txt not found — skipping GPU overlay check."
+    warn "/boot/firmware/config.txt not found — skipping GPU overlay."
 fi
 
 # ── 3. Hardware watchdog ──────────────────────────────────────────────────────
-#   Enables the Pi's built-in watchdog timer. If the kernel hangs for more
-#   than 15 seconds the hardware will force a reboot automatically.
 WATCHDOG_CONF=/etc/systemd/system.conf
 if ! grep -q "^RuntimeWatchdogSec" "$WATCHDOG_CONF" 2>/dev/null; then
-    echo "" >> "$WATCHDOG_CONF"
-    echo "# Kiosk hardware watchdog" >> "$WATCHDOG_CONF"
-    echo "RuntimeWatchdogSec=15" >> "$WATCHDOG_CONF"
-    echo "ShutdownWatchdogSec=2min" >> "$WATCHDOG_CONF"
+    {
+        echo ""
+        echo "# Kiosk hardware watchdog"
+        echo "RuntimeWatchdogSec=15"
+        echo "ShutdownWatchdogSec=2min"
+    } >> "$WATCHDOG_CONF"
     log "Hardware watchdog enabled (15s timeout)"
 else
     log "Hardware watchdog already configured"
 fi
 
-# Also enable the bcm2835 watchdog module
-if ! grep -q "bcm2835_wdt" /etc/modules 2>/dev/null; then
-    echo "bcm2835_wdt" >> /etc/modules
-    modprobe bcm2835_wdt 2>/dev/null || true
-    log "bcm2835_wdt watchdog module enabled"
+# Pi 4 watchdog module (Pi 5 has it built in)
+if [[ $PI_GEN -eq 4 ]]; then
+    if ! grep -q "bcm2835_wdt" /etc/modules 2>/dev/null; then
+        echo "bcm2835_wdt" >> /etc/modules
+        modprobe bcm2835_wdt 2>/dev/null || true
+        log "bcm2835_wdt watchdog module enabled (Pi 4)"
+    fi
 fi
 
-# ── 4. Autologin via LightDM ──────────────────────────────────────────────────
+# ── 4. Autologin ──────────────────────────────────────────────────────────────
 LIGHTDM_CONF=/etc/lightdm/lightdm.conf
 if [[ -f "$LIGHTDM_CONF" ]]; then
     sed -i "/^\[Seat:\*\]/,/^\[/ s/^#\?autologin-user=.*/autologin-user=$KIOSK_USER/" "$LIGHTDM_CONF"
     sed -i "/^\[Seat:\*\]/,/^\[/ s/^#\?autologin-user-timeout=.*/autologin-user-timeout=0/" "$LIGHTDM_CONF"
-    sed -i "/^\[Seat:\*\]/,/^\[/ s/^#\?autologin-session=.*/autologin-session=labwc/" "$LIGHTDM_CONF"
-    log "Autologin: $KIOSK_USER → labwc Wayland session"
+    if $IS_TRIXIE; then
+        sed -i "/^\[Seat:\*\]/,/^\[/ s/^#\?autologin-session=.*/autologin-session=labwc/" "$LIGHTDM_CONF"
+        log "Autologin: $KIOSK_USER → labwc session"
+    else
+        sed -i "/^\[Seat:\*\]/,/^\[/ s/^#\?autologin-session=.*/autologin-session=LXDE-pi/" "$LIGHTDM_CONF"
+        log "Autologin: $KIOSK_USER → LXDE-pi session"
+    fi
 else
-    warn "lightdm.conf not found. Enable autologin manually via raspi-config."
+    warn "lightdm.conf not found — enable autologin via raspi-config."
 fi
 
-# ── 5. GTK dark theme (OS-level dark mode) ───────────────────────────────────
-#   Sets the GTK colour scheme and theme for the kiosk user so that any
-#   GTK widgets (including Chromium's file pickers etc.) appear dark.
-GTK_SETTINGS_DIR="$KIOSK_HOME/.config/gtk-3.0"
-mkdir -p "$GTK_SETTINGS_DIR"
-cat > "$GTK_SETTINGS_DIR/settings.ini" << 'EOF'
+# ── 5. Dark mode — GTK (works on both compositors) ───────────────────────────
+GTK3_DIR="$KIOSK_HOME/.config/gtk-3.0"
+GTK4_DIR="$KIOSK_HOME/.config/gtk-4.0"
+mkdir -p "$GTK3_DIR" "$GTK4_DIR"
+
+for GTK_DIR in "$GTK3_DIR" "$GTK4_DIR"; do
+    cat > "$GTK_DIR/settings.ini" << 'EOF'
 [Settings]
 gtk-application-prefer-dark-theme=1
 gtk-theme-name=Adwaita-dark
 EOF
+done
+log "GTK dark theme set (gtk-3.0 + gtk-4.0)"
 
-GTK4_SETTINGS_DIR="$KIOSK_HOME/.config/gtk-4.0"
-mkdir -p "$GTK4_SETTINGS_DIR"
-cat > "$GTK4_SETTINGS_DIR/settings.ini" << 'EOF'
-[Settings]
-gtk-application-prefer-dark-theme=1
-gtk-theme-name=Adwaita-dark
-EOF
+# ── 6. Compositor-specific setup ─────────────────────────────────────────────
+mkdir -p "$AUTOSTART_DIR"
 
-# XDG color-scheme preference (read by portals & some Wayland-native apps)
-DCONF_PROFILE_DIR="$KIOSK_HOME/.config/dconf"
-mkdir -p "$DCONF_PROFILE_DIR"
-# We set this via the environment file so it applies without a dbus session
-log "GTK dark theme configured (gtk-3.0 + gtk-4.0 + Adwaita-dark)"
-
-# ── 6. labwc environment — dark mode + display env vars ──────────────────────
-#   labwc sources ~/.config/labwc/environment before launching the session.
-mkdir -p "$LABWC_DIR"
-cat > "$LABWC_DIR/environment" << EOF
-# ── Kiosk environment ─────────────────────────────────────────────────────────
-
-# Force dark mode for GTK apps and Chromium via the portal color-scheme hint
+if $IS_TRIXIE; then
+    # ── Trixie: labwc environment ─────────────────────────────────────────────
+    cat > "$AUTOSTART_DIR/environment" << 'EOF'
 GTK_THEME=Adwaita:dark
 DBUS_SESSION_COLOR_SCHEME=prefer-dark
-
-# Chromium Wayland backend
 CHROME_EXTRA_FLAGS="--ozone-platform=wayland"
-
-# Prevent Qt apps from overriding dark theme
 QT_STYLE_OVERRIDE=adwaita-dark
 EOF
-log "labwc environment file written (dark mode env vars set)"
+    log "labwc environment file written (dark mode env vars)"
 
-# ── 7. labwc autostart — Chromium kiosk launcher with crash watchdog ─────────
-#   This script is sourced by labwc on session start.
-#   The inner while-loop is the crash watchdog: Chromium is automatically
-#   relaunched if it exits unexpectedly (crash, OOM kill, etc.).
-#   A 5-second network wait prevents a blank screen on cold boot.
-cat > "$LABWC_DIR/autostart" << AUTOSTART
+    # ── Trixie: labwc rc.xml ──────────────────────────────────────────────────
+    RC_XML="$AUTOSTART_DIR/rc.xml"
+    cat > "$RC_XML" << 'RCEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<labwc_config>
+  <core>
+    <cursorHideTimeout>1000</cursorHideTimeout>
+  </core>
+  <theme>
+    <backgroundColor>#000000</backgroundColor>
+  </theme>
+  <keyboard>
+    <!-- All keybindings cleared — kiosk cannot be escaped via keyboard -->
+  </keyboard>
+  <windowRules>
+    <windowRule identifier="*">
+      <action name="Maximize"/>
+    </windowRule>
+  </windowRules>
+</labwc_config>
+RCEOF
+    log "labwc rc.xml written (black bg, cursor hidden, keybindings cleared)"
+
+    # ── Trixie: systemd inhibitor (prevents Wayland idle blanking) ────────────
+    SYSTEMD_USER_DIR="$KIOSK_HOME/.config/systemd/user"
+    mkdir -p "$SYSTEMD_USER_DIR"
+    cat > "$SYSTEMD_USER_DIR/kiosk-inhibit.service" << 'EOF'
+[Unit]
+Description=Kiosk display sleep/blank inhibitor
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit \
+    --what=idle:sleep:handle-lid-switch \
+    --who=kiosk \
+    --why="Kiosk display must stay on" \
+    --mode=block \
+    /bin/sleep infinity
+Restart=always
+
+[Install]
+WantedBy=default.target
+EOF
+    sudo -u "$KIOSK_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$KIOSK_USER")" \
+        systemctl --user enable kiosk-inhibit.service 2>/dev/null \
+        || warn "kiosk-inhibit.service will activate on next login."
+    log "Idle/blank inhibitor service installed"
+
+    # ── Trixie: labwc autostart ───────────────────────────────────────────────
+    cat > "$AUTOSTART_FILE" << AUTOSTART
 #!/bin/bash
-# ── Kiosk autostart (labwc / Wayland) ────────────────────────────────────────
-# Generated by kiosk-setup.sh — edit KIOSK_URL_VALUE to change the URL,
-# or run:  sudo bash kiosk-setup.sh --update-url https://new-url.com
+# ── Kiosk autostart (Trixie / Wayland + labwc) ───────────────────────────────
+# To change the URL run: sudo bash kiosk-setup.sh --update-url https://new-url.com
 
-# URL — update this line or use the --update-url flag
   KIOSK_URL_VALUE=$KIOSK_URL
 
-# ── Black background — painted FIRST so no desktop flash is ever visible ──────
-# swaybg holds a solid black Wayland surface behind Chromium at all times.
-# It stays running — Chromium in kiosk mode covers it completely once loaded.
+# Black background — painted first so the desktop is never visible
 swaybg -m solid_color -c 000000 &
 
-# ── Display rotation ──────────────────────────────────────────────────────────
+# Display rotation (edit DISPLAY_TRANSFORM in kiosk-setup.sh and re-run)
 $(if [[ "$DISPLAY_TRANSFORM" != "normal" ]]; then
     echo "wlr-randr --output $DISPLAY_OUTPUT --transform $DISPLAY_TRANSFORM"
 else
     echo "# wlr-randr --output $DISPLAY_OUTPUT --transform 90   # uncomment to rotate"
 fi)
 
-# ── Wait for network before launching (avoids blank screen on cold boot) ──────
-MAX_WAIT=30
-WAITED=0
+# Wait for network before launching
+MAX_WAIT=30; WAITED=0
 while ! curl -s --max-time 2 "\$KIOSK_URL_VALUE" > /dev/null 2>&1; do
-    sleep 2
-    WAITED=\$((WAITED + 2))
-    if [ \$WAITED -ge \$MAX_WAIT ]; then
-        echo "[\$(date)] Network timeout — launching anyway" >> /var/log/kiosk.log
-        break
-    fi
+    sleep 2; WAITED=\$((WAITED + 2))
+    [ \$WAITED -ge \$MAX_WAIT ] && echo "[\$(date)] Network timeout — launching anyway" >> /var/log/kiosk.log && break
 done
 
-# ── Auto-reload helper (optional) ─────────────────────────────────────────────
 $(if [[ $AUTO_RELOAD_SECONDS -gt 0 ]]; then
-cat << 'RELOAD'
-# Periodically sends a reload keystroke to Chromium via wtype
-(
-  while true; do
-    sleep AUTO_RELOAD_SECONDS
-    WAYLAND_DISPLAY=\$WAYLAND_DISPLAY wtype -k F5 2>/dev/null || true
-  done
-) &
-RELOAD
-sed -i "s/AUTO_RELOAD_SECONDS/$AUTO_RELOAD_SECONDS/" "$LABWC_DIR/autostart"
-else
-    echo "# Auto-reload disabled. Set AUTO_RELOAD_SECONDS > 0 in kiosk-setup.sh to enable."
+echo "# Auto-reload every ${AUTO_RELOAD_SECONDS}s"
+echo "(while true; do sleep $AUTO_RELOAD_SECONDS; WAYLAND_DISPLAY=\$WAYLAND_DISPLAY wtype -k F5 2>/dev/null; done) &"
 fi)
 
-# ── Chromium crash watchdog loop ──────────────────────────────────────────────
-# Chromium is relaunched automatically if it exits for any reason.
+# Chromium crash watchdog — relaunches automatically on unexpected exit
 while true; do
     echo "[\$(date)] Launching Chromium → \$KIOSK_URL_VALUE" >> /var/log/kiosk.log
     chromium \\
@@ -322,125 +395,155 @@ while true; do
       --disable-features=TouchpadOverscrollHistoryNavigation \\
       --overscroll-history-navigation=0 \\
       --hide-scrollbars \\
-      --disable-features=OverscrollHistoryNavigation \\
       --autoplay-policy=no-user-gesture-required \\
       "\$KIOSK_URL_VALUE"
-    EXIT_CODE=\$?
-    echo "[\$(date)] Chromium exited (code \$EXIT_CODE) — restarting in 5s..." >> /var/log/kiosk.log
+    echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> /var/log/kiosk.log
     sleep 5
 done &
 AUTOSTART
+    chmod +x "$AUTOSTART_FILE"
+    log "labwc autostart written"
 
-chmod +x "$LABWC_DIR/autostart"
-log "labwc autostart written with crash watchdog + network wait"
-
-# ── 8. labwc rc.xml — disable keybinds, hide cursor ─────────────────────────
-RC_XML="$LABWC_DIR/rc.xml"
-cat > "$RC_XML" << 'RCEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<labwc_config>
-  <core>
-    <!-- Hide cursor after 1 second of inactivity -->
-    <cursorHideTimeout>1000</cursorHideTimeout>
-  </core>
-  <theme>
-    <!-- Solid black background — belt-and-suspenders behind swaybg -->
-    <name></name>
-    <backgroundColor>#000000</backgroundColor>
-  </theme>
-  <keyboard>
-    <!-- All keybindings cleared — kiosk cannot be escaped via keyboard -->
-  </keyboard>
-  <windowRules>
-    <!-- Force all windows to be fullscreen and undecorated -->
-    <windowRule identifier="*">
-      <action name="Maximize"/>
-    </windowRule>
-  </windowRules>
-</labwc_config>
-RCEOF
-log "labwc rc.xml written (cursor hidden, keybindings cleared)"
-
-# ── 9. Systemd user service — idle screen blanking inhibitor ─────────────────
-SYSTEMD_USER_DIR="$KIOSK_HOME/.config/systemd/user"
-mkdir -p "$SYSTEMD_USER_DIR"
-
-cat > "$SYSTEMD_USER_DIR/kiosk-inhibit.service" << 'EOF'
-[Unit]
-Description=Kiosk display sleep/blank inhibitor
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/systemd-inhibit \
-    --what=idle:sleep:handle-lid-switch \
-    --who=kiosk \
-    --why="Kiosk display must stay on" \
-    --mode=block \
-    /bin/sleep infinity
-Restart=always
-
-[Install]
-WantedBy=default.target
+else
+    # ── Bookworm: Xorg blanking config ───────────────────────────────────────
+    mkdir -p /etc/X11/xorg.conf.d
+    cat > /etc/X11/xorg.conf.d/10-kiosk-blanking.conf << 'EOF'
+Section "ServerFlags"
+    Option "BlankTime"   "0"
+    Option "StandbyTime" "0"
+    Option "SuspendTime" "0"
+    Option "OffTime"     "0"
+EndSection
 EOF
+    log "Xorg blanking disabled via xorg.conf.d"
 
-sudo -u "$KIOSK_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$KIOSK_USER")" \
-    systemctl --user enable kiosk-inhibit.service 2>/dev/null \
-    || warn "kiosk-inhibit.service will activate on next login (normal during install)"
+    # ── Bookworm: black LXDE desktop background (prevents desktop flash) ──────
+    PCMANFM_DIR="$KIOSK_HOME/.config/pcmanfm/LXDE-pi"
+    mkdir -p "$PCMANFM_DIR"
+    cat > "$PCMANFM_DIR/desktop-items-0.conf" << 'EOF'
+[*]
+wallpaper_mode=color
+desktop_bg=#000000
+desktop_fg=#000000
+desktop_shadow=#000000
+show_documents=0
+show_trash=0
+show_mounts=0
+EOF
+    log "LXDE desktop background set to black (no desktop flash)"
 
-log "Idle/blank inhibitor service installed"
+    # ── Bookworm: LXDE autostart ──────────────────────────────────────────────
+    cat > "$AUTOSTART_FILE" << AUTOSTART
+# ── Kiosk autostart (Bookworm / X11 + LXDE) ─────────────────────────────────
+# To change the URL run: sudo bash kiosk-setup.sh --update-url https://new-url.com
 
-# ── 10. Disable Bluetooth and Wi-Fi power-save (reduces display stutter) ──────
-if command -v rfkill &>/dev/null; then
-    rfkill block bluetooth 2>/dev/null || true
+# Sentinel line — do not rename this variable
+  KIOSK_URL_VALUE=$KIOSK_URL
+
+# Paint black root window immediately (belt-and-suspenders against flash)
+@xsetroot -solid black
+
+# Disable screen saver and DPMS
+@xset s off
+@xset -dpms
+@xset s noblank
+
+# Hide the mouse cursor when idle
+@unclutter -idle 0.5 -root
+
+# Wait for network then launch Chromium via wrapper script
+@bash -c '
+  KIOSK_URL=\$(grep "KIOSK_URL_VALUE=" $AUTOSTART_FILE | head -1 | cut -d= -f2)
+  MAX_WAIT=30; WAITED=0
+  while ! curl -s --max-time 2 "\$KIOSK_URL" > /dev/null 2>&1; do
+    sleep 2; WAITED=\$((WAITED + 2))
+    [ \$WAITED -ge \$MAX_WAIT ] && echo "[\$(date)] Network timeout" >> /var/log/kiosk.log && break
+  done
+  while true; do
+    echo "[\$(date)] Launching Chromium → \$KIOSK_URL" >> /var/log/kiosk.log
+    chromium-browser \
+      --enable-features=WebContentsForceDark \
+      --force-dark-mode \
+      --kiosk \
+      --noerrdialogs \
+      --disable-infobars \
+      --disable-notifications \
+      --disable-popup-blocking \
+      --no-first-run \
+      --disable-default-apps \
+      --disable-extensions \
+      --disable-translate \
+      --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
+      --incognito \
+      --disable-session-crashed-bubble \
+      --disable-restore-session-state \
+      --disable-save-password-bubble \
+      --disable-sync \
+      --disable-background-networking \
+      --check-for-update-interval=31536000 \
+      --disable-pinch \
+      --touch-events=enabled \
+      --overscroll-history-navigation=0 \
+      --hide-scrollbars \
+      --autoplay-policy=no-user-gesture-required \
+      "\$KIOSK_URL"
+    echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> /var/log/kiosk.log
+    sleep 5
+  done
+'
+AUTOSTART
+
+    # Fix the self-referential path in the Bookworm autostart wrapper
+    sed -i "s|$AUTOSTART_FILE|$AUTOSTART_FILE|g" "$AUTOSTART_FILE"
+
+    log "LXDE autostart written"
 fi
-# Disable Wi-Fi power management (prevents random network drops)
+
+# ── 7. Wi-Fi power-save off ───────────────────────────────────────────────────
 WIFI_PM_CONF=/etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
 cat > "$WIFI_PM_CONF" << 'EOF'
 [connection]
 wifi.powersave = 2
 EOF
-log "Wi-Fi power management disabled (prevents network drops)"
+log "Wi-Fi power management disabled"
 
-# ── 11. SD card wear reduction — reduce unnecessary writes ───────────────────
-#   Moves tmp and log dirs to RAM (tmpfs) to reduce SD card writes.
-#   Uncomment if you want this — be aware logs won't survive a reboot.
-# if ! grep -q "tmpfs /tmp" /etc/fstab; then
-#     echo "tmpfs /tmp  tmpfs defaults,noatime,nosuid,size=64m 0 0" >> /etc/fstab
-#     echo "tmpfs /var/tmp tmpfs defaults,noatime,nosuid,size=16m 0 0" >> /etc/fstab
-#     log "tmpfs mounts added for /tmp and /var/tmp (SD card wear reduction)"
-# fi
-
-# ── 12. Set correct ownership ─────────────────────────────────────────────────
+# ── 8. Ownership ──────────────────────────────────────────────────────────────
 chown -R "$KIOSK_USER:$KIOSK_USER" "$KIOSK_HOME/.config"
 log "Ownership set for $KIOSK_HOME/.config"
 
-# ── 13. Shutdown + RTC wake script ───────────────────────────────────────────
+# ── 9. Shutdown + RTC wake script ────────────────────────────────────────────
 SHUTDOWN_MINUTE_PAD=$(printf '%02d' $SHUTDOWN_MINUTE)
 WAKE_MINUTE_PAD=$(printf '%02d' $WAKE_MINUTE)
+
+# Pi 5 RTC device path differs from external modules
+if [[ $PI_GEN -eq 5 ]]; then
+    RTC_DEVICE_PATH="/sys/class/rtc/rtc0/wakealarm"
+    RTC_NOTE="Pi 5 built-in RTC"
+else
+    RTC_DEVICE_PATH="/sys/class/rtc/rtc0/wakealarm"
+    RTC_NOTE="External RTC module (e.g. DS3231)"
+fi
 
 cat > /usr/local/bin/kiosk-shutdown.sh << SCRIPT
 #!/bin/bash
 # =============================================================================
-#  kiosk-shutdown.sh — Scheduled shutdown with RTC wake alarm
-#  Called at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD} daily by cron.
-#  Sets the RTC alarm to wake the Pi at ${WAKE_HOUR}:${WAKE_MINUTE_PAD}.
+#  kiosk-shutdown.sh
+#  Shuts down the Pi and sets an RTC wake alarm.
+#  RTC: $RTC_NOTE
 # =============================================================================
 
 WAKE_HOUR=${WAKE_HOUR}
 WAKE_MINUTE=${WAKE_MINUTE}
-RTC_DEVICE=/sys/class/rtc/rtc0/wakealarm
+RTC_DEVICE=${RTC_DEVICE_PATH}
 
-echo "[\$(date)] Preparing shutdown — RTC wake set for \${WAKE_HOUR}:\$(printf '%02d' \$WAKE_MINUTE)..." \
+echo "[\$(date)] Shutdown initiated — setting RTC wake for \${WAKE_HOUR}:\$(printf '%02d' \$WAKE_MINUTE)..." \
     | tee -a /var/log/kiosk.log
 
-# ── Calculate wake epoch ──────────────────────────────────────────────────────
 WAKE_TIME_STR="\${WAKE_HOUR}:\$(printf '%02d' \$WAKE_MINUTE):00"
 NOW=\$(date +%s)
 TODAY_WAKE=\$(date -d "today \${WAKE_TIME_STR}" +%s)
 TOMORROW_WAKE=\$(date -d "tomorrow \${WAKE_TIME_STR}" +%s)
 
-# Always wake tomorrow if we're past today's wake time
 if [ "\$NOW" -ge "\$TODAY_WAKE" ]; then
     WAKE_EPOCH=\$TOMORROW_WAKE
 else
@@ -450,11 +553,10 @@ fi
 WAKE_DATE=\$(date -d "@\$WAKE_EPOCH" '+%A %Y-%m-%d %H:%M:%S')
 echo "[\$(date)] RTC alarm → \$WAKE_DATE" | tee -a /var/log/kiosk.log
 
-# ── Set RTC alarm ─────────────────────────────────────────────────────────────
 if [[ -w "\$RTC_DEVICE" ]]; then
-    echo 0 > "\$RTC_DEVICE"              # clear any existing alarm
+    echo 0 > "\$RTC_DEVICE"
     echo "\$WAKE_EPOCH" > "\$RTC_DEVICE"
-    echo "[\$(date)] Alarm written via sysfs (\$RTC_DEVICE)" | tee -a /var/log/kiosk.log
+    echo "[\$(date)] Alarm written via sysfs" | tee -a /var/log/kiosk.log
 elif command -v rtcwake &>/dev/null; then
     rtcwake -m no -t "\$WAKE_EPOCH"
     echo "[\$(date)] Alarm set via rtcwake" | tee -a /var/log/kiosk.log
@@ -463,7 +565,6 @@ else
     exit 1
 fi
 
-# ── Sync filesystem and shut down ────────────────────────────────────────────
 sync
 echo "[\$(date)] Shutting down. Good night!" | tee -a /var/log/kiosk.log
 /sbin/shutdown -h now
@@ -472,13 +573,12 @@ SCRIPT
 chmod +x /usr/local/bin/kiosk-shutdown.sh
 log "Shutdown script → /usr/local/bin/kiosk-shutdown.sh"
 
-# ── 14. Cron job for nightly shutdown ────────────────────────────────────────
-CRON_EXPR="$SHUTDOWN_MINUTE $SHUTDOWN_HOUR * * *"
-CRON_JOB="$CRON_EXPR /usr/local/bin/kiosk-shutdown.sh >> /var/log/kiosk.log 2>&1"
+# ── 10. Cron job ──────────────────────────────────────────────────────────────
+CRON_JOB="$SHUTDOWN_MINUTE $SHUTDOWN_HOUR * * * /usr/local/bin/kiosk-shutdown.sh >> /var/log/kiosk.log 2>&1"
 ( crontab -l 2>/dev/null | grep -v "kiosk-shutdown"; echo "$CRON_JOB" ) | crontab -
-log "Cron job: shutdown daily at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}"
+log "Cron: shutdown daily at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}"
 
-# ── 15. Log rotation ──────────────────────────────────────────────────────────
+# ── 11. Log rotation ──────────────────────────────────────────────────────────
 cat > /etc/logrotate.d/kiosk << 'EOF'
 /var/log/kiosk.log {
     weekly
@@ -488,18 +588,21 @@ cat > /etc/logrotate.d/kiosk << 'EOF'
     notifempty
 }
 EOF
-log "Log rotation: /var/log/kiosk.log (weekly, 4 weeks)"
+log "Log rotation configured"
 
-# ── 16. Write install marker (enables --update-url mode) ─────────────────────
+# ── 12. Install marker ────────────────────────────────────────────────────────
 cat > "$INSTALL_MARKER" << EOF
-# Kiosk install marker — do not delete
 INSTALLED=$(date '+%Y-%m-%d %H:%M:%S')
+OS=$OS_CODENAME
+PI=$PI_MODEL
 USER=$KIOSK_USER
 URL=$KIOSK_URL
+COMPOSITOR=$COMPOSITOR
+AUTOSTART=$AUTOSTART_FILE
 SHUTDOWN=${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}
 WAKE=${WAKE_HOUR}:${WAKE_MINUTE_PAD}
 EOF
-log "Install marker written to $INSTALL_MARKER"
+log "Install marker → $INSTALL_MARKER"
 
 # =============================================================================
 #  Done
@@ -509,25 +612,36 @@ hr
 echo -e "${GREEN}  Setup Complete!${NC}"
 hr
 echo ""
+echo -e "  ${CYAN}Pi model     :${NC} $PI_MODEL"
+echo -e "  ${CYAN}OS           :${NC} $OS_CODENAME"
+echo -e "  ${CYAN}Compositor   :${NC} $COMPOSITOR"
 echo -e "  ${CYAN}Kiosk URL    :${NC} $KIOSK_URL"
-echo -e "  ${CYAN}Kiosk user   :${NC} $KIOSK_USER"
-echo -e "  ${CYAN}Compositor   :${NC} Wayland + labwc"
-echo -e "  ${CYAN}Dark mode    :${NC} Forced (OS + Chromium)"
-echo -e "  ${CYAN}Shutdown     :${NC} Daily at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD} (cron)"
-echo -e "  ${CYAN}Wake         :${NC} Daily at ${WAKE_HOUR}:${WAKE_MINUTE_PAD} (RTC alarm)"
-echo -e "  ${CYAN}Watchdog     :${NC} Hardware (15s) + Chromium crash (auto-restart)"
+echo -e "  ${CYAN}Dark mode    :${NC} Forced (GTK + Chromium)"
+echo -e "  ${CYAN}Shutdown     :${NC} Daily at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}"
+echo -e "  ${CYAN}Wake         :${NC} Daily at ${WAKE_HOUR}:${WAKE_MINUTE_PAD} (RTC)"
 echo -e "  ${CYAN}Logs         :${NC} /var/log/kiosk.log"
 echo ""
-warn "Before relying on RTC wake, verify your hardware clock is synced:"
-echo "    sudo hwclock -r             # read hardware clock"
-echo "    sudo hwclock --systohc      # sync system time → RTC"
-echo ""
+
+if ! $HAS_BUILTIN_RTC; then
+    warn "Pi 4 detected — RTC wake requires an external module (e.g. DS3231):"
+    echo "    sudo hwclock -r           # verify hardware clock"
+    echo "    sudo hwclock --systohc    # sync system time → RTC"
+    echo ""
+else
+    info "Pi 5 built-in RTC detected. Verify it:"
+    echo "    sudo hwclock -r"
+    echo "    sudo hwclock --systohc"
+    echo ""
+fi
+
+if $IS_TRIXIE; then
+    info "To rotate display, set DISPLAY_TRANSFORM in the script and re-run."
+    echo "    Current output name can be found with:  wlr-randr"
+    echo ""
+fi
+
 info "To update the URL without reinstalling:"
 echo "    sudo bash $0 --update-url https://new-url.com"
-echo ""
-info "To rotate the display, set DISPLAY_TRANSFORM in this script"
-echo "    then re-run, or uncomment the wlr-randr line in:"
-echo "    $LABWC_DIR/autostart"
 echo ""
 warn "Reboot to start the kiosk:"
 echo "    sudo reboot"
