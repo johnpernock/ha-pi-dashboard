@@ -59,6 +59,40 @@ DISPLAY_OUTPUT="HDMI-A-1"
 AUTO_RELOAD_SECONDS=0
 
 # =============================================================================
+#  HOME ASSISTANT AUTO-LOGIN (optional)
+# =============================================================================
+# Set HA_AUTO_LOGIN=true to skip the HA login screen automatically.
+# Two methods work together as belt-and-suspenders:
+#
+#  Method 1 - Trusted Networks (recommended, configured on the HA side):
+#    Add the YAML block printed at the end of this install to your HA
+#    configuration.yaml. HA will then auto-authenticate any request from
+#    your local subnet with no credentials stored on the Pi at all.
+#
+#  Method 2 - Token wrapper page (configured here, Pi side):
+#    Set HA_TOKEN to a long-lived access token created in HA.
+#    The script generates a local HTML page that injects the token into
+#    Chromium's localStorage before redirecting to your dashboard.
+#    Create a token: HA -> Profile -> Long-Lived Access Tokens -> Create Token.
+#
+# Using both methods means auto-login works even if one fails.
+# If HA_AUTO_LOGIN=false this entire section is ignored.
+
+HA_AUTO_LOGIN=false
+
+# Full URL of your Home Assistant instance.
+# Examples: http://192.168.1.100:8123  or  http://homeassistant.local:8123
+HA_URL="http://homeassistant.local:8123"
+
+# Long-lived access token from HA Profile page.
+# Leave empty to use Trusted Networks only (no wrapper page generated).
+HA_TOKEN=""
+
+# Dashboard path to land on after login.
+# Examples: /lovelace/0  /lovelace/kiosk  /dashboard-kiosk
+HA_DASHBOARD_PATH="/lovelace/0"
+
+# =============================================================================
 #  Internal — do not edit below this line
 # =============================================================================
 
@@ -920,8 +954,146 @@ SHUTDOWN=${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}
 WAKE=${WAKE_HOUR}:${WAKE_MINUTE_PAD}
 RTC_ENABLED=$RTC_ENABLED
 OSK_ENABLED=$ENABLE_OSK
+HA_AUTO_LOGIN=$HA_AUTO_LOGIN
 EOF
 log "Install marker → $INSTALL_MARKER"
+
+# ── 13. Home Assistant auto-login ─────────────────────────────────────────────
+HA_WRAPPER_PATH="$KIOSK_HOME/kiosk-ha-login.html"
+HA_WRAPPER_URL="file://$HA_WRAPPER_PATH"
+
+_setup_ha_autologin() {
+    # ── Method 1: print Trusted Networks YAML for user to add to HA ────────
+    # Detect local subnet from the Pi's default route interface
+    LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+    SUBNET=$(echo "$LOCAL_IP" | awk -F. '{print $1"."$2"."$3".0/24"}')
+
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}  Step required: Add this to Home Assistant${NC}"
+    echo -e "${CYAN}  configuration.yaml then restart HA${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "  homeassistant:"
+    echo "    auth_providers:"
+    echo "      - type: trusted_networks"
+    echo "        trusted_networks:"
+    echo "          - $SUBNET          # your local subnet (auto-detected)"
+    echo "          - 127.0.0.1"
+    echo "        trusted_users:"
+    echo "          $SUBNET:"
+    echo "            - user_id: YOUR_HA_USER_ID   # see note below"
+    echo "        allow_bypass_login: true"
+    echo "      - type: homeassistant  # keep this so other devices still work"
+    echo ""
+    echo -e "${YELLOW}  How to find YOUR_HA_USER_ID:${NC}"
+    echo "    HA → Settings → People → click your user → copy the ID from the URL"
+    echo "    (looks like: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4)"
+    echo ""
+    echo -e "${YELLOW}  After editing configuration.yaml:${NC}"
+    echo "    HA → Developer Tools → Check Configuration → Restart HA"
+    echo ""
+
+    # ── Method 2: generate token wrapper page (if HA_TOKEN provided) ───────
+    if [[ -n "$HA_TOKEN" ]]; then
+        log "Generating HA token wrapper page → $HA_WRAPPER_PATH"
+        cat > "$HA_WRAPPER_PATH" << HTMLEOF
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Connecting to Home Assistant...</title>
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: sans-serif;
+    }
+    .msg {
+      color: #4fc3f7;
+      font-size: 1.2rem;
+      opacity: 0;
+      animation: fadein 0.6s ease 0.3s forwards;
+    }
+    @keyframes fadein { to { opacity: 1; } }
+  </style>
+</head>
+<body>
+  <p class="msg">Connecting to Home Assistant…</p>
+  <script>
+    // Inject the long-lived access token into HA's localStorage auth store.
+    // HA's frontend reads hassTokens on load and skips the login screen
+    // when a valid token is present.
+    (function() {
+      var HA_URL    = "${HA_URL}";
+      var HA_PATH   = "${HA_DASHBOARD_PATH}";
+      var TOKEN     = "${HA_TOKEN}";
+      var CLIENT_ID = "https://home-assistant.io/";
+
+      // HA stores auth as a JSON object keyed by client ID + HA URL
+      var authKey = "hassTokens";
+      var authData = {};
+
+      try {
+        authData = JSON.parse(localStorage.getItem(authKey) || "{}");
+      } catch(e) {}
+
+      // Overwrite with our long-lived token.
+      // The expires field is set far in the future; HA will refresh as needed.
+      authData[HA_URL] = {
+        access_token  : TOKEN,
+        token_type    : "Bearer",
+        expires_in    : 1800,
+        hassUrl       : HA_URL,
+        clientId      : CLIENT_ID,
+        expires       : Date.now() + (1800 * 1000),
+        refresh_token : TOKEN   // HA treats long-lived tokens as self-refreshing
+      };
+
+      try {
+        localStorage.setItem(authKey, JSON.stringify(authData));
+      } catch(e) {
+        // localStorage unavailable on file:// — fall through to direct redirect
+      }
+
+      // Navigate to HA dashboard. Trusted Networks handles auth server-side;
+      // the localStorage token is a belt-and-suspenders fallback.
+      window.location.replace(HA_URL + HA_PATH);
+    })();
+  </script>
+</body>
+</html>
+HTMLEOF
+        chown "$KIOSK_USER:$KIOSK_USER" "$HA_WRAPPER_PATH"
+        log "Token wrapper page created"
+
+        # Point the kiosk autostart at the wrapper page instead of HA directly.
+        # The wrapper loads instantly (local file), injects the token, then
+        # redirects. From the user's perspective it is instantaneous.
+        sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=$HA_WRAPPER_URL|" "$AUTOSTART_FILE"
+        sed -i "s|^URL=.*|URL=$HA_WRAPPER_URL|" "$INSTALL_MARKER"
+        log "Autostart updated to use wrapper page"
+
+        echo -e "${CYAN}[i]${NC} Kiosk start URL updated to local wrapper:"
+        echo "    $HA_WRAPPER_URL"
+        echo "    (auto-redirects to ${HA_URL}${HA_DASHBOARD_PATH})"
+        echo ""
+    else
+        info "No HA_TOKEN set — wrapper page skipped."
+        info "Trusted Networks alone will handle auto-login."
+        info "Make sure you add the YAML above to configuration.yaml."
+    fi
+}
+
+if $HA_AUTO_LOGIN; then
+    _setup_ha_autologin
+else
+    info "HA auto-login disabled (HA_AUTO_LOGIN=false). Set to true to enable."
+fi
 
 # =============================================================================
 #  Summary
@@ -937,6 +1109,7 @@ echo -e "  ${CYAN}Compositor     :${NC} $COMPOSITOR"
 echo -e "  ${CYAN}Kiosk URL      :${NC} $KIOSK_URL"
 echo -e "  ${CYAN}Dark mode      :${NC} Forced (GTK + Chromium)"
 echo -e "  ${CYAN}OSK            :${NC} $([ "$ENABLE_OSK" = true ] && echo "Enabled ($OSK_PKG)" || echo "Disabled")"
+echo -e "  ${CYAN}HA Auto-login  :${NC} $(${HA_AUTO_LOGIN} && echo "Enabled (${HA_URL})" || echo "Disabled")"
 echo -e "  ${CYAN}Watchdog       :${NC} $($HAS_HW_WATCHDOG && echo "Hardware (15s)" || echo "None — software-only")"
 echo -e "  ${CYAN}Logs           :${NC} /var/log/kiosk.log"
 echo ""

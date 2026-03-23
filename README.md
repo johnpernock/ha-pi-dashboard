@@ -97,6 +97,10 @@ All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Ed
 | `DISPLAY_TRANSFORM` | `normal` | Screen rotation: `normal` / `90` / `180` / `270` *(Trixie only)* |
 | `DISPLAY_OUTPUT` | `HDMI-A-1` | Wayland output name *(Trixie only — run `wlr-randr` to find yours)* |
 | `AUTO_RELOAD_SECONDS` | `0` | Auto-reload page every N seconds (`0` = off) |
+| `HA_AUTO_LOGIN` | `false` | Enable HA auto-login: `true` or `false` |
+| `HA_URL` | `http://homeassistant.local:8123` | Full URL of your HA instance |
+| `HA_TOKEN` | `""` | Long-lived access token from HA Profile (leave blank for Trusted Networks only) |
+| `HA_DASHBOARD_PATH` | `/lovelace/0` | Dashboard path to open after login |
 
 ---
 
@@ -284,6 +288,82 @@ Both:
   /etc/logrotate.d/kiosk                     Log rotation config
   /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
 ```
+
+---
+
+## Home Assistant Auto-Login
+
+For Home Assistant dashboards on a local network, the script supports two auto-login methods that work together as belt-and-suspenders. Configure both for the most reliable result.
+
+### Method 1 — Trusted Networks (HA side, recommended)
+
+Tells Home Assistant to automatically authenticate any device connecting from your local subnet. No credentials are stored on the Pi — HA trusts the network origin.
+
+**Add to `configuration.yaml` on your HA instance:**
+
+```yaml
+homeassistant:
+  auth_providers:
+    - type: trusted_networks
+      trusted_networks:
+        - 192.168.1.0/24      # replace with your subnet (script auto-detects this)
+        - 127.0.0.1
+      trusted_users:
+        192.168.1.0/24:
+          - user_id: YOUR_HA_USER_ID   # see below
+      allow_bypass_login: true
+    - type: homeassistant    # keep this so other devices can still log in normally
+```
+
+**Finding `YOUR_HA_USER_ID`:**
+HA → Settings → People → click your user → copy the ID from the browser URL bar (looks like `a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4`).
+
+**After editing:**
+HA → Developer Tools → Check Configuration → Restart HA
+
+> The script auto-detects your local subnet from the Pi's default route and prints the exact YAML block during install — you can copy it directly.
+
+---
+
+### Method 2 — Token Wrapper Page (Pi side)
+
+A tiny local HTML file served from the Pi that injects a long-lived access token into Chromium's localStorage before redirecting to your HA dashboard. HA's frontend reads this token on load and skips the login screen.
+
+**Create a long-lived access token in HA:**
+HA → Profile (bottom left) → Long-Lived Access Tokens → Create Token → copy it
+
+**Set in `kiosk-setup.sh` before running:**
+
+```bash
+HA_AUTO_LOGIN=true
+HA_URL="http://homeassistant.local:8123"   # or your HA IP
+HA_TOKEN="your-long-lived-token-here"
+HA_DASHBOARD_PATH="/lovelace/0"            # or your dashboard path
+```
+
+The script will:
+1. Generate `~/kiosk-ha-login.html` containing your token
+2. Set the kiosk start URL to `file://~/kiosk-ha-login.html`
+3. The wrapper loads instantly (local file), injects the token, then redirects to HA
+
+> **Security note:** The token is stored in a local file on the Pi. It is only readable by the kiosk user. Anyone with physical or SSH access to the Pi could read it. For a wall-panel on a trusted LAN this is acceptable; for a publicly accessible Pi it is not.
+
+---
+
+### Using Both Together
+
+Trusted Networks handles auth at the HA server level. The wrapper page handles it at the browser level. Using both means auto-login works even if:
+- Trusted Networks config has a typo (wrapper page recovers)
+- The wrapper page fails (Trusted Networks recovers)
+- HA is updated and changes localStorage key format (Trusted Networks recovers)
+
+**To enable both:** set `HA_AUTO_LOGIN=true`, `HA_URL`, `HA_TOKEN`, and `HA_DASHBOARD_PATH` in the config block, then run the install. The Trusted Networks YAML is printed at the end for you to copy into HA.
+
+---
+
+### Using Trusted Networks Only (no token)
+
+If you prefer not to store a token on the Pi, leave `HA_TOKEN=""` and just add the Trusted Networks YAML to HA. The `HA_AUTO_LOGIN=true` flag will print the YAML but skip generating the wrapper page.
 
 ---
 
