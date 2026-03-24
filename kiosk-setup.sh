@@ -64,6 +64,12 @@ DISPLAY_OUTPUT="HDMI-A-1"
 # Auto-reload page every N seconds (0 = disabled)
 AUTO_RELOAD_SECONDS=0
 
+# Remove desktop bloat packages that serve no purpose on a kiosk
+# (Wolfram/Mathematica, LibreOffice, Scratch, Sonic Pi, Thonny, games, etc.)
+# true  = remove them during install (saves 1-3GB+ on a full desktop image)
+# false = leave them untouched
+REMOVE_BLOAT=true
+
 # =============================================================================
 #  HOME ASSISTANT AUTO-LOGIN (optional)
 # =============================================================================
@@ -599,6 +605,39 @@ _reset_kiosk() {
         log "LightDM autologin disabled"
     fi
 
+    # ── Kiosk-installed packages ───────────────────────────────────────────────
+    # Read back the package list saved at install time and remove those packages
+    local PREV_PKGS=""
+    if [[ -f /etc/kiosk-installed ]]; then
+        PREV_PKGS=$(grep "^INSTALLED_PKGS=" /etc/kiosk-installed | cut -d= -f2-)
+    fi
+
+    if [[ -n "$PREV_PKGS" ]]; then
+        echo ""
+        read -r -p "$(echo -e "${YELLOW}[?]${NC} Remove kiosk packages installed by this script? [Y/n] ")" PKG_REPLY
+        if [[ ! "${PKG_REPLY,,}" =~ ^n ]]; then
+            log "Removing kiosk packages: $PREV_PKGS"
+            # Only remove packages that are actually installed (safe if some were removed already)
+            REMOVE_LIST=()
+            for pkg in $PREV_PKGS; do
+                dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && REMOVE_LIST+=("$pkg")
+            done
+            if [[ ${#REMOVE_LIST[@]} -gt 0 ]]; then
+                apt-get remove -y -qq --purge "${REMOVE_LIST[@]}" 2>/dev/null || true
+                apt-get autoremove -y -qq --purge 2>/dev/null || true
+                apt-get autoclean -qq 2>/dev/null || true
+                log "Packages removed and orphans cleaned up"
+            else
+                log "No tracked packages found to remove (already uninstalled)"
+            fi
+        else
+            info "Package removal skipped"
+        fi
+    else
+        info "No package list in install marker — skipping package removal"
+        info "(Packages can be removed manually or via apt)"
+    fi
+
     # ── Install marker ────────────────────────────────────────────────────────
     if [[ -f /etc/kiosk-installed ]]; then
         rm -f /etc/kiosk-installed
@@ -709,18 +748,17 @@ $ENABLE_OSK && OSK_PKGS=("$OSK_PKG")
 
 if $IS_TRIXIE; then
     log "Installing packages (Trixie / Wayland)..."
-    apt-get install -y -qq \
-        "$CHROMIUM_PKG" cage wlr-randr swaybg xdg-utils jq \
-        "${BASE_PKGS[@]}" "${OSK_PKGS[@]}"
+    INSTALLED_PKGS=("$CHROMIUM_PKG" cage wlr-randr swaybg xdg-utils jq "${BASE_PKGS[@]}" "${OSK_PKGS[@]}")
+    apt-get install -y -qq "${INSTALLED_PKGS[@]}"
 else
     # X11 path covers Bookworm, Bullseye, Buster, legacy
     log "Installing packages (${OS_CODENAME} / X11)..."
-    PKGS=("$CHROMIUM_PKG" unclutter x11-xserver-utils "${BASE_PKGS[@]}" "${OSK_PKGS[@]}")
+    INSTALLED_PKGS=("$CHROMIUM_PKG" unclutter x11-xserver-utils "${BASE_PKGS[@]}" "${OSK_PKGS[@]}")
     # xdotool only available on Bullseye+
-    $IS_BUSTER || $IS_LEGACY || PKGS+=(xdotool)
+    $IS_BUSTER || $IS_LEGACY || INSTALLED_PKGS+=(xdotool)
     # jq may not be in Buster repos
-    apt-cache show jq &>/dev/null && PKGS+=(jq) || true
-    apt-get install -y -qq "${PKGS[@]}"
+    apt-cache show jq &>/dev/null && INSTALLED_PKGS+=(jq) || true
+    apt-get install -y -qq "${INSTALLED_PKGS[@]}"
 fi
 
 # ── 2. GPU overlay ────────────────────────────────────────────────────────────
@@ -1160,6 +1198,7 @@ WAKE=${WAKE_HOUR}:${WAKE_MINUTE_PAD}
 RTC_ENABLED=$RTC_ENABLED
 OSK_ENABLED=$ENABLE_OSK
 HA_AUTO_LOGIN=$HA_AUTO_LOGIN
+INSTALLED_PKGS=${INSTALLED_PKGS[*]}
 EOF
 log "Install marker → $INSTALL_MARKER"
 
@@ -1299,6 +1338,63 @@ if $HA_AUTO_LOGIN; then
 else
     info "HA auto-login disabled (HA_AUTO_LOGIN=false). Set to true to enable."
 fi
+
+# ── 14. Bloat removal + apt cleanup ───────────────────────────────────────────────
+# Packages that are present on a full Pi desktop image but have no purpose
+# on a wall-panel kiosk. Safe to remove — none are kiosk dependencies.
+BLOAT_PKGS=(
+    # Wolfram / Mathematica — 800MB+ on some images
+    wolfram-engine wolfram-script
+    # LibreOffice suite
+    libreoffice libreoffice-base libreoffice-calc libreoffice-common
+    libreoffice-core libreoffice-draw libreoffice-impress libreoffice-math
+    libreoffice-writer libreoffice-base-core libreoffice-gtk3 soffice
+    # Scratch / Scratch 3
+    scratch scratch3 scratch3-upstream-resources
+    # Sonic Pi
+    sonic-pi sonic-pi-server
+    # Thonny IDE
+    thonny
+    # Minecraft
+    minecraft-pi python3-minecraftpi
+    # Greenfoot / BlueJ IDEs
+    greenfoot bluej
+    # Desktop games
+    timidity freeciv-client-gtk freeciv-data gnome-games
+    # NodeRED (not needed unless specifically wanted)
+    nodered
+    # Unused desktop apps
+    geany geany-common
+    claws-mail claws-mail-i18n
+    galculator
+    # Pi-specific extras that add no value to a kiosk
+    python3-thonny
+)
+
+if $REMOVE_BLOAT; then
+    log "Checking for bloat packages to remove..."
+    FOUND_BLOAT=()
+    for pkg in "${BLOAT_PKGS[@]}"; do
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+            FOUND_BLOAT+=("$pkg")
+        fi
+    done
+
+    if [[ ${#FOUND_BLOAT[@]} -gt 0 ]]; then
+        log "Removing ${#FOUND_BLOAT[@]} bloat package(s): ${FOUND_BLOAT[*]}"
+        apt-get remove -y -qq --purge "${FOUND_BLOAT[@]}" 2>/dev/null || true
+        log "Bloat packages removed"
+    else
+        log "No bloat packages found (already clean)"
+    fi
+else
+    info "Bloat removal skipped (REMOVE_BLOAT=false)"
+fi
+
+log "Running apt autoremove + autoclean..."
+apt-get autoremove -y -qq --purge 2>/dev/null || true
+apt-get autoclean -qq 2>/dev/null || true
+log "Package cleanup complete"
 
 # =============================================================================
 #  Summary

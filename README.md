@@ -88,6 +88,7 @@ sudo bash kiosk-setup.sh --enable-rtc
 | **Wi-Fi power-save off** | Prevents random network drops |
 | **Log rotation** | `/var/log/kiosk.log` rotated weekly, 4 weeks retained |
 | **Idempotent updates** | `--update-url` and `--enable-rtc` are safe to run at any time |
+| **Package cleanup** | Removes desktop bloat (Wolfram, LibreOffice, Scratch, Thonny, games) and runs `autoremove`/`autoclean` after install; `--reset` can also uninstall exactly the packages the script added |
 | **Clean reset** | `--reset` wipes all kiosk config (autologin, autostart, cron, watchdog, HA wrapper, LightDM) with a confirmation prompt — optionally followed by a fresh install in one command |
 | **Existing install guard** | Full install detects a previous install and prompts: reset, update URL, overwrite, or quit — no accidental overwrites |
 
@@ -108,6 +109,7 @@ All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Ed
 | `DISPLAY_TRANSFORM` | `normal` | Screen rotation: `normal` / `90` / `180` / `270` *(Trixie only)* |
 | `DISPLAY_OUTPUT` | `HDMI-A-1` | Wayland output name *(Trixie only — run `wlr-randr` to find yours)* |
 | `AUTO_RELOAD_SECONDS` | `0` | Auto-reload page every N seconds (`0` = off) |
+| `REMOVE_BLOAT` | `true` | Remove desktop bloat packages during install (LibreOffice, Wolfram, Scratch, etc.) |
 | `HA_AUTO_LOGIN` | `false` | Enable HA auto-login: `true` or `false` |
 | `HA_URL` | `http://homeassistant.local:8123` | Full URL of your HA instance |
 | `HA_TOKEN` | `""` | Long-lived access token from HA Profile (leave blank for Trusted Networks only) |
@@ -452,6 +454,44 @@ This replaces the token in `~/kiosk-ha-login.html` only. No other configuration 
 ### Using Trusted Networks Only (no token)
 
 If you prefer not to store a token on the Pi, leave `HA_TOKEN=""` and just add the Trusted Networks YAML to HA. The `HA_AUTO_LOGIN=true` flag will print the YAML but skip generating the wrapper page.
+
+---
+
+## Package Management
+
+### Bloat removal
+
+The script probes for known desktop-only packages and removes any it finds during a full install. None of these are required for kiosk operation:
+
+| Category | Packages removed |
+|---|---|
+| Wolfram / Mathematica | `wolfram-engine`, `wolfram-script` |
+| LibreOffice | Full suite (`libreoffice*`) |
+| Scratch | `scratch`, `scratch3`, `scratch3-upstream-resources` |
+| Sonic Pi | `sonic-pi`, `sonic-pi-server` |
+| Thonny IDE | `thonny`, `python3-thonny` |
+| Minecraft | `minecraft-pi`, `python3-minecraftpi` |
+| Java IDEs | `greenfoot`, `bluej` |
+| Desktop games | `timidity`, `gnome-games`, `freeciv-*` |
+| Unused apps | `geany`, `claws-mail`, `galculator`, `nodered` |
+
+Only packages that are **actually installed** on the device are removed — nothing happens if a package isn't present. Set `REMOVE_BLOAT=false` in the config block to skip this entirely.
+
+After the targeted removal the script always runs:
+```bash
+apt-get autoremove --purge   # remove orphaned dependencies
+apt-get autoclean            # clear the local package cache
+```
+
+### Package tracking and reset
+
+The install marker (`/etc/kiosk-installed`) records exactly which packages the script installed. When you run `--reset`, it reads that list back and offers to remove only those packages — nothing else is touched:
+
+```
+[?] Remove kiosk packages installed by this script? [Y/n]
+```
+
+Answering Y removes the tracked packages, runs `autoremove`, and cleans the cache. Answering N leaves packages in place and only wipes the config files.
 
 ---
 
