@@ -51,6 +51,12 @@ sudo reboot
 # Full install
 sudo bash kiosk-setup.sh https://your-dashboard.com
 
+# Wipe all existing config and reinstall fresh
+sudo bash kiosk-setup.sh --reset https://your-dashboard.com
+
+# Reset only (no immediate reinstall — prompts to confirm first)
+sudo bash kiosk-setup.sh --reset
+
 # Update the displayed URL — no reinstall, safe to run anytime
 sudo bash kiosk-setup.sh --update-url https://new-url.com
 
@@ -82,6 +88,8 @@ sudo bash kiosk-setup.sh --enable-rtc
 | **Wi-Fi power-save off** | Prevents random network drops |
 | **Log rotation** | `/var/log/kiosk.log` rotated weekly, 4 weeks retained |
 | **Idempotent updates** | `--update-url` and `--enable-rtc` are safe to run at any time |
+| **Clean reset** | `--reset` wipes all kiosk config (autologin, autostart, cron, watchdog, HA wrapper, LightDM) with a confirmation prompt — optionally followed by a fresh install in one command |
+| **Existing install guard** | Full install detects a previous install and prompts: reset, update URL, overwrite, or quit — no accidental overwrites |
 
 ---
 
@@ -104,6 +112,68 @@ All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Ed
 | `HA_URL` | `http://homeassistant.local:8123` | Full URL of your HA instance |
 | `HA_TOKEN` | `""` | Long-lived access token from HA Profile (leave blank for Trusted Networks only) |
 | `HA_DASHBOARD_PATH` | `/lovelace/0` | Dashboard path to open after login |
+
+---
+
+## Resetting an Existing Install
+
+If a kiosk is already configured and you want to start completely fresh, use `--reset`. It removes every file and setting the script created, then optionally runs a clean install immediately.
+
+### Reset + reinstall in one command
+
+```bash
+sudo bash kiosk-setup.sh --reset https://your-new-dashboard.com
+```
+
+Wipes everything, then falls straight through to a full install with the new URL. No second command needed.
+
+### Reset only (then reinstall separately)
+
+```bash
+sudo bash kiosk-setup.sh --reset
+# ... make any config changes to kiosk-setup.sh ...
+sudo bash kiosk-setup.sh https://your-dashboard.com
+```
+
+Prompts for confirmation before wiping, then exits cleanly so you can edit the config before reinstalling.
+
+### What gets removed
+
+| Item | Location |
+|---|---|
+| labwc autostart, environment, rc.xml | `~/.config/labwc/` |
+| LXDE autostart | `~/.config/lxsession/LXDE-pi/` |
+| LXDE desktop background config | `~/.config/pcmanfm/LXDE-pi/` |
+| GTK dark theme settings | `~/.config/gtk-3.0/` and `gtk-4.0/` |
+| Systemd idle inhibitor service | `~/.config/systemd/user/kiosk-inhibit.service` |
+| HA token wrapper page | `~/kiosk-ha-login.html` |
+| Xorg blanking config | `/etc/X11/xorg.conf.d/10-kiosk-blanking.conf` |
+| Wi-Fi power-save config | `/etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf` |
+| Nightly shutdown script | `/usr/local/bin/kiosk-shutdown.sh` |
+| Cron job | root crontab |
+| Hardware watchdog entries | `/etc/systemd/system.conf` |
+| LightDM autologin | `/etc/lightdm/lightdm.conf` (commented out) |
+| Install marker | `/etc/kiosk-installed` |
+
+> `/var/log/kiosk.log` is intentionally preserved so you have a record of what the previous install did.
+
+### Existing install guard
+
+Running a full install on an already-configured device (without `--reset`) triggers an interactive prompt:
+
+```
+[!] An existing kiosk install was detected (/etc/kiosk-installed).
+[i]   Installed : 2025-03-01 14:22:00
+[i]   URL       : http://192.168.1.100:8123
+
+  Options:
+    [r] Reset and reinstall fresh
+    [u] Update URL only
+    [c] Continue anyway and overwrite
+    [q] Quit
+```
+
+This prevents accidental overwrites of working installations.
 
 ---
 

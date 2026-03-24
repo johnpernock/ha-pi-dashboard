@@ -19,6 +19,9 @@
 #    Full install:
 #      sudo bash kiosk-setup.sh https://your-dashboard.com
 #
+#    Wipe existing config and reinstall fresh:
+#      sudo bash kiosk-setup.sh --reset https://your-dashboard.com
+#
 #    Update displayed URL (no reinstall):
 #      sudo bash kiosk-setup.sh --update-url https://new-url.com
 #
@@ -115,7 +118,7 @@ SHUTDOWN_MINUTE_PAD=$(printf '%02d' "$SHUTDOWN_MINUTE")
 WAKE_MINUTE_PAD=$(printf '%02d' "$WAKE_MINUTE")
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--update-url|--set-token|--enable-rtc] <args>"
+[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--reset|--update-url|--set-token|--enable-rtc] <args>"
 command -v raspi-config &>/dev/null || err "This doesn't look like a Raspberry Pi. Aborting."
 
 # =============================================================================
@@ -504,11 +507,173 @@ if [[ "$1" == "--set-token" ]]; then
 fi
 
 # =============================================================================
+#  --reset — wipe all kiosk config and start fresh
+# =============================================================================
+_reset_kiosk() {
+    local TARGET_USER="$1"
+    local TARGET_HOME="/home/$TARGET_USER"
+
+    hr; banner "  Kiosk Reset — Removing All Configuration"; hr; echo ""
+    warn "This will remove ALL kiosk configuration for user: $TARGET_USER"
+    warn "Log file (/var/log/kiosk.log) will be preserved."
+    echo ""
+    read -r -p "$(echo -e "${RED}[!]${NC} Are you sure you want to wipe the kiosk config? [y/N] ")" REPLY
+    [[ "${REPLY,,}" =~ ^y ]] || { echo "Reset cancelled."; exit 0; }
+    echo ""
+
+    # ── Autostart files ──────────────────────────────────────────────────
+    local LABWC_DIR="$TARGET_HOME/.config/labwc"
+    local LXDE_DIR="$TARGET_HOME/.config/lxsession/LXDE-pi"
+    local PCMANFM_DIR="$TARGET_HOME/.config/pcmanfm/LXDE-pi"
+
+    for f in         "$LABWC_DIR/autostart"         "$LABWC_DIR/environment"         "$LABWC_DIR/rc.xml"         "$LXDE_DIR/autostart"         "$PCMANFM_DIR/desktop-items-0.conf"; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f"
+            log "Removed: $f"
+        fi
+    done
+
+    # ── GTK theme settings ───────────────────────────────────────────────
+    for f in         "$TARGET_HOME/.config/gtk-3.0/settings.ini"         "$TARGET_HOME/.config/gtk-4.0/settings.ini"; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f"
+            log "Removed: $f"
+        fi
+    done
+
+    # ── Systemd user service ───────────────────────────────────────────
+    local INHIBIT_SVC="$TARGET_HOME/.config/systemd/user/kiosk-inhibit.service"
+    if [[ -f "$INHIBIT_SVC" ]]; then
+        sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$TARGET_USER")"             systemctl --user disable kiosk-inhibit.service 2>/dev/null || true
+        rm -f "$INHIBIT_SVC"
+        log "Removed and disabled: kiosk-inhibit.service"
+    fi
+
+    # ── HA wrapper page ─────────────────────────────────────────────────────
+    local HA_WRAPPER="$TARGET_HOME/kiosk-ha-login.html"
+    if [[ -f "$HA_WRAPPER" ]]; then
+        rm -f "$HA_WRAPPER"
+        log "Removed: $HA_WRAPPER"
+    fi
+
+    # ── Xorg blanking config ──────────────────────────────────────────────
+    if [[ -f /etc/X11/xorg.conf.d/10-kiosk-blanking.conf ]]; then
+        rm -f /etc/X11/xorg.conf.d/10-kiosk-blanking.conf
+        log "Removed: /etc/X11/xorg.conf.d/10-kiosk-blanking.conf"
+    fi
+
+    # ── Wi-Fi power-save config ────────────────────────────────────────────
+    if [[ -f /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf ]]; then
+        rm -f /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
+        log "Removed: 99-kiosk-wifi-powersave.conf"
+    fi
+
+    # ── Shutdown script ───────────────────────────────────────────────────────
+    if [[ -f /usr/local/bin/kiosk-shutdown.sh ]]; then
+        rm -f /usr/local/bin/kiosk-shutdown.sh
+        log "Removed: /usr/local/bin/kiosk-shutdown.sh"
+    fi
+
+    # ── Cron job ───────────────────────────────────────────────────────────────
+    ( crontab -l 2>/dev/null | grep -v "kiosk-shutdown" ) | crontab - 2>/dev/null || true
+    log "Cron job removed"
+
+    # ── Log rotation config ─────────────────────────────────────────────────
+    if [[ -f /etc/logrotate.d/kiosk ]]; then
+        rm -f /etc/logrotate.d/kiosk
+        log "Removed: /etc/logrotate.d/kiosk"
+    fi
+
+    # ── Hardware watchdog entries ───────────────────────────────────────────
+    if grep -q "Kiosk hardware watchdog" /etc/systemd/system.conf 2>/dev/null; then
+        sed -i '/# Kiosk hardware watchdog/,/ShutdownWatchdogSec=2min/d' /etc/systemd/system.conf
+        log "Removed: hardware watchdog entries from system.conf"
+    fi
+
+    # ── LightDM autologin ────────────────────────────────────────────────────
+    local LIGHTDM_CONF=/etc/lightdm/lightdm.conf
+    if [[ -f "$LIGHTDM_CONF" ]]; then
+        sed -i "/^\[Seat:\*\]/,/^\[/ s/^autologin-user=.*/#autologin-user=/" "$LIGHTDM_CONF"
+        sed -i "/^\[Seat:\*\]/,/^\[/ s/^autologin-user-timeout=.*/#autologin-user-timeout=/" "$LIGHTDM_CONF"
+        sed -i "/^\[Seat:\*\]/,/^\[/ s/^autologin-session=.*/#autologin-session=/" "$LIGHTDM_CONF"
+        log "LightDM autologin disabled"
+    fi
+
+    # ── Install marker ────────────────────────────────────────────────────────
+    if [[ -f /etc/kiosk-installed ]]; then
+        rm -f /etc/kiosk-installed
+        log "Removed: /etc/kiosk-installed"
+    fi
+
+    echo ""
+    log "Reset complete. All kiosk configuration has been removed."
+    info "/var/log/kiosk.log has been preserved."
+    echo ""
+}
+
+if [[ "$1" == "--reset" ]]; then
+    # Allow URL to be passed alongside --reset for immediate reinstall
+    RESET_URL="${2:-}"
+    _reset_kiosk "$KIOSK_USER"
+
+    if [[ -n "$RESET_URL" ]]; then
+        info "URL provided — proceeding with fresh install: $RESET_URL"
+        KIOSK_URL="$RESET_URL"
+        echo ""
+        # Fall through to full install below
+    else
+        warn "Run a fresh install when ready:"
+        echo "    sudo bash $0 https://your-dashboard.com"
+        echo ""
+        exit 0
+    fi
+fi
+
+# =============================================================================
 #  Full install
 # =============================================================================
-[[ "$1" != "https://"* && "$1" != "http://"* && -n "$1" ]] && \
-    err "Unknown argument: '$1'. Did you mean --update-url, --set-token, or --enable-rtc?"
-[[ -z "$1" ]] && warn "No URL supplied — defaulting to https://example.com"
+[[ "$1" != "--reset" && "$1" != "https://"* && "$1" != "http://"* && -n "$1" ]] && \
+    err "Unknown argument: '$1'. Did you mean --reset, --update-url, --set-token, or --enable-rtc?"
+[[ -z "$1" || "$1" == "--reset" ]] && [[ -z "$RESET_URL" ]] && warn "No URL supplied — defaulting to https://example.com"
+
+# ── Existing install guard ─────────────────────────────────────────────────────
+if [[ -f "$INSTALL_MARKER" && "$1" != "--reset" ]]; then
+    echo ""
+    warn "An existing kiosk install was detected (/etc/kiosk-installed)."
+    PREV_URL=$(grep "^URL=" "$INSTALL_MARKER" | cut -d= -f2)
+    PREV_DATE=$(grep "^INSTALLED=" "$INSTALL_MARKER" | cut -d= -f2)
+    info "  Installed : $PREV_DATE"
+    info "  URL       : $PREV_URL"
+    echo ""
+    echo "  Options:"
+    echo "    [r] Reset and reinstall fresh  (sudo bash $0 --reset https://new-url.com)"
+    echo "    [u] Update URL only            (sudo bash $0 --update-url https://new-url.com)"
+    echo "    [c] Continue anyway and overwrite"
+    echo "    [q] Quit"
+    echo ""
+    read -r -p "$(echo -e "${YELLOW}[?]${NC} Choose [r/u/c/q]: ")" CHOICE
+    case "${CHOICE,,}" in
+        r)
+            echo ""
+            _reset_kiosk "$KIOSK_USER"
+            info "Continuing with fresh install..."
+            echo ""
+            ;;
+        u)
+            echo ""
+            info "Run:  sudo bash $0 --update-url https://new-url.com"
+            exit 0
+            ;;
+        c)
+            warn "Continuing — existing config will be overwritten."
+            echo ""
+            ;;
+        *)
+            echo "Quitting."
+            exit 0
+            ;;
+    esac
+fi
 
 hr
 banner "  Raspberry Pi Wall Panel Kiosk — Full Install"
