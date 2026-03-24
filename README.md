@@ -485,7 +485,9 @@ apt-get autoclean            # clear the local package cache
 
 ### Package tracking and reset
 
-The install marker (`/etc/kiosk-installed`) records exactly which packages the script installed. When you run `--reset`, it reads that list back and offers to remove only those packages — nothing else is touched:
+The install marker (`/etc/kiosk-installed`) records exactly which packages the script installed via the `INSTALLED_PKGS` field. The package list varies depending on your OS, compositor, and whether the OSK was enabled — it is built at install time and stored automatically, so you never need to set it manually.
+
+When you run `--reset`, the script reads `INSTALLED_PKGS` back from the marker and offers to remove only those packages — nothing else is touched:
 
 ```
 [?] Remove kiosk packages installed by this script? [Y/n]
@@ -567,7 +569,11 @@ which chromium
 which chromium-browser
 ```
 
-Update `CHROMIUM_PKG` at the top of `kiosk-setup.sh` if needed and re-run.
+The script auto-detects the correct package (`chromium` on Trixie, `chromium-browser` on Bookworm/Bullseye). If neither binary exists, install Chromium manually:
+```bash
+sudo apt-get install chromium           # Trixie
+sudo apt-get install chromium-browser   # Bookworm / Bullseye
+```
 
 ### Pi Zero / Pi 1 — Chromium won't start
 
