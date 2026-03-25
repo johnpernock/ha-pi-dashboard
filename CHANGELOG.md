@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.7.0] — 2026-03-25
+
+### Added
+
+- **`kiosk.conf` local config override** — personal settings now live in a git-ignored `kiosk.conf` file alongside the script; `git pull` never overwrites them. Copy `kiosk.conf.example` to get started. Script prints a confirmation line when `kiosk.conf` is loaded.
+- **`kiosk.conf.example`** — template file with every configurable variable commented out and documented
+- **Guard against combined flags** — `--factory-reset` and `--reset` now immediately error if `$2` starts with `--` (e.g. `--factory-reset --set-token TOKEN URL`), printing clear instructions to run flags one at a time
+
+### Fixed
+
+- **Black screen on boot (critical)** — `kiosk.log` was written to `/var/log/kiosk.log` which the kiosk user cannot write to. The `>>` redirect caused the entire network-wait loop to crash with a permission error before Chromium ever launched, leaving a black screen with only a cursor. Log moved to `~/kiosk.log` (home directory, always writable). Log file is now created and chowned during install.
+- **Chromium exiting immediately (critical)** — conditional `$(if ...; fi)` lines inside the heredoc that evaluated to empty string left blank lines in the middle of a backslash-continuation command, terminating it early. `--kiosk` and all subsequent flags ran as separate shell commands instead of Chromium flags, causing Chromium to launch without kiosk mode and exit cleanly after a few seconds. Fixed by pre-building the entire Chromium command as a `_CHROME_FLAGS` string in the script (where bash is guaranteed) before the heredoc is written. The heredoc then contains one clean `chromium $_CHROME_FLAGS "$KIOSK_URL_VALUE"` line — no backslash continuations, no conditionals, no arrays.
+- **Bash array syntax breaking autostart** — replaced `CHROMIUM_FLAGS=(...)` array (bash-only) and `eval` approaches with the pre-built string approach above. The written autostart now passes `sh -n` syntax check with zero errors.
+- **HA login screen appearing despite token** — the token wrapper page was loaded from `file://` which is a different browser origin than `http://192.168.1.x:8123`. localStorage is strictly origin-scoped, so a token written at the `file://` origin is completely invisible to HA at the `http://` origin. Fixed by changing `HA_WRAPPER_URL` from `file://$HA_WRAPPER_PATH` to `$HA_URL/local/kiosk-ha-login.html`. The script now also attempts to auto-copy the wrapper page to the HA `www` folder (`/config/www/`) during install.
+- **Double-backslash in Trixie autostart** — conditional `echo` statements inside the heredoc produced `\` (two backslashes) instead of `\` (one), broken by the pre-built string fix above.
+- **`_reset_kiosk()` definition order** — function was called before it was defined when `--factory-reset` ran; moved definition above the first call site.
+
+---
+
 ## [1.6.0] — 2026-03-25
 
 ### Added

@@ -730,6 +730,46 @@ sudo reboot
 
 If Chromium still fails, consider a lighter browser (`surf`, `midori`) or upgrade to a Pi Zero 2W or Pi 3.
 
+### Black screen with cursor — Chromium never launches
+
+This means the autostart ran but died before the Chromium watchdog loop started. Two confirmed causes:
+
+**Cause 1 — Log file permission denied:**
+The kiosk user cannot write to `/var/log/`. If the log is pointing there, the `>>` redirect crashes the entire script.
+```bash
+# Check where the log is pointing
+grep "KIOSK_LOG" ~/.config/labwc/autostart
+# Should be ~/kiosk.log NOT /var/log/kiosk.log
+```
+If it shows `/var/log/kiosk.log`, pull the latest script and reinstall — the log path was fixed in v1.7.0.
+
+**Cause 2 — Autostart not running as bash:**
+labwc runs the autostart with `sh` if the file is not executable. Any bash-only syntax (arrays, `+=`) causes a silent error.
+```bash
+ls -la ~/.config/labwc/autostart   # must show -rwxr-xr-x (executable)
+sh -n ~/.config/labwc/autostart    # must show no syntax errors
+```
+Fix: `chmod +x ~/.config/labwc/autostart`
+
+### Chromium launches but exits after 2–5 seconds
+
+Exit code 0 means Chromium intentionally quit — not a crash. This happens when `--kiosk` was not passed (Chromium opened in a normal window and then closed). Usually caused by the autostart's Chromium command being broken by blank lines or bad quoting.
+```bash
+# Check the chromium line in the autostart
+grep "chromium" ~/.config/labwc/autostart
+# Should be ONE long line with all flags including --kiosk
+```
+If you see multiple lines, arrays, or eval — pull the latest script (fixed in v1.7.0) and reinstall.
+
+### Settings overwritten by git pull
+
+Never edit `kiosk-setup.sh` directly. Put your settings in `kiosk.conf` instead:
+```bash
+cp kiosk.conf.example kiosk.conf
+nano kiosk.conf
+```
+`kiosk.conf` is git-ignored and survives every `git pull`. See the [Configuration](#configuration) section.
+
 ### Home Assistant login screen still appearing
 
 **Check 1 — Trusted Networks not configured:**
@@ -758,6 +798,22 @@ If your HA IP changed, the token wrapper will redirect to the old address. Updat
 sudo bash kiosk-setup.sh --reset https://your-new-ha-url:8123
 ```
 Then re-set `HA_AUTO_LOGIN=true`, `HA_URL`, and `HA_TOKEN` in the config block before reinstalling.
+
+**Token injection not working — localStorage origin mismatch:**
+The wrapper page must be served from the **same origin as HA** (`http://HA_IP:8123/local/...`), not from `file://`. localStorage is strictly origin-scoped — a token written at `file://` is invisible to HA at `http://`.
+
+Check where your kiosk is pointed:
+```bash
+grep "KIOSK_URL_VALUE" ~/.config/labwc/autostart
+# Must show: http://HA_IP:8123/local/kiosk-ha-login.html
+# Must NOT show: file:///home/...
+```
+
+If it shows `file://`, the wrapper page needs to be on your HA server:
+1. Copy `~/kiosk-ha-login.html` to `/config/www/kiosk-ha-login.html` on your HA machine
+2. Update the autostart: `sed -i 's|KIOSK_URL_VALUE=.*|KIOSK_URL_VALUE=http://HA_IP:8123/local/kiosk-ha-login.html|' ~/.config/labwc/autostart`
+3. `sudo pkill chromium` — watchdog relaunches with new URL
+
 
 ### browser_mod not registering the kiosk
 
