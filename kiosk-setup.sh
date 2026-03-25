@@ -1284,8 +1284,8 @@ while true; do
       --ozone-platform=wayland \\
       --enable-features=UseOzonePlatform,WebContentsForceDark \\
       --force-dark-mode \\
-      $(if $ENABLE_OSK; then echo "--enable-virtual-keyboard \\\\"; fi)
-      $(if $ENABLE_BROWSER_MOD; then echo "--user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\\\"; else echo "--incognito \\\\"; fi)
+      $(if $ENABLE_OSK; then echo "--enable-virtual-keyboard \\"; fi)
+      $(if $ENABLE_BROWSER_MOD; then echo "--user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo "--incognito \\"; fi)
       $(echo "$CHROMIUM_MEMORY_FLAGS" | sed 's/^ *//' | tr '\n' ' ')
       --kiosk \\
       --noerrdialogs \\
@@ -1298,7 +1298,7 @@ while true; do
       --disable-translate \\
       --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \\
       --disable-session-crashed-bubble \\
-      $(if ! $ENABLE_BROWSER_MOD; then echo "--disable-restore-session-state \\\\"; fi)
+      $(if ! $ENABLE_BROWSER_MOD; then echo "--disable-restore-session-state \\"; fi)
       --disable-save-password-bubble \\
       --disable-sync \\
       --disable-background-networking \\
