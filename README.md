@@ -959,7 +959,7 @@ xinput list                             # Bookworm/X11 — confirm touch device 
 Based on the full setup, here are features worth considering next:
 
 ### Popup automations — companion repo
-The [homeassistant-kiosk-popup-automation](https://github.com/johnpernock/homeassistant-kiosk-popup-automation) repo contains ready-to-use browser_mod popup cards for this kiosk setup:
+The [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) repo contains ready-to-use browser_mod popup cards for this kiosk setup:
 - **NWS weather alerts** — severity-tiered (Extreme/Severe/Moderate/Minor), color-coded, wakes displays
 - **Doorbell camera** — 30-second live feed on both displays when the bell rings
 - **SEPTA train delays** — fires when your next train exceeds a delay threshold; matches the septa-paoli-card in the dashboard
@@ -1006,7 +1006,7 @@ The repo is structured per-device, but for fleets of displays, a simple `deploy.
 |---|---|
 | [ha-pi-dashboard](https://github.com/johnpernock/ha-pi-dashboard) | This repo — kiosk OS setup, display API, browser_mod wiring |
 | [ha-lovelace-cards](https://github.com/johnpernock/ha-lovelace-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
-| [homeassistant-kiosk-popup-automation](https://github.com/johnpernock/homeassistant-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
+| [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
 
 ---
 
