@@ -1558,7 +1558,11 @@ log "Install marker → $INSTALL_MARKER"
 
 # ── 13. Home Assistant auto-login ─────────────────────────────────────────────
 HA_WRAPPER_PATH="$KIOSK_HOME/kiosk-ha-login.html"
-HA_WRAPPER_URL="file://$HA_WRAPPER_PATH"
+# The wrapper page MUST be served from the HA origin so localStorage writes
+# land in the correct origin scope. file:// and http:// are different origins —
+# a token written in file:// localStorage is invisible to HA at http://.
+# We copy the file to HA's www folder and load it via /local/.
+HA_WRAPPER_URL="$HA_URL/local/kiosk-ha-login.html"
 
 _setup_ha_autologin() {
     # ── Method 1: print Trusted Networks YAML for user to add to HA ────────
@@ -1674,18 +1678,39 @@ _setup_ha_autologin() {
 </html>
 HTMLEOF
         chown "$KIOSK_USER:$KIOSK_USER" "$HA_WRAPPER_PATH"
-        log "Token wrapper page created"
+        log "Token wrapper page created: $HA_WRAPPER_PATH"
 
-        # Point the kiosk autostart at the wrapper page instead of HA directly.
-        # The wrapper loads instantly (local file), injects the token, then
-        # redirects. From the user's perspective it is instantaneous.
+        # IMPORTANT: The wrapper page MUST be served from the HA origin.
+        # localStorage is origin-scoped — a token written at file:// is
+        # completely invisible to HA at http://. Copy to HA www folder so
+        # it loads from http://HA_URL/local/kiosk-ha-login.html.
+        HA_COPIED=false
+        for HA_CFG_DIR in /config /root/config /home/homeassistant/.homeassistant /usr/share/hassio/homeassistant; do
+            if [[ -d "$HA_CFG_DIR" ]]; then
+                mkdir -p "$HA_CFG_DIR/www" 2>/dev/null
+                if cp "$HA_WRAPPER_PATH" "$HA_CFG_DIR/www/kiosk-ha-login.html" 2>/dev/null; then
+                    log "Wrapper copied to HA: $HA_CFG_DIR/www/kiosk-ha-login.html"
+                    HA_COPIED=true
+                    break
+                fi
+            fi
+        done
+        if ! $HA_COPIED; then
+            warn "Could not auto-copy wrapper to HA www folder."
+            echo "  Copy it manually before rebooting:"
+            echo "    cp $HA_WRAPPER_PATH <HA_CONFIG>/www/kiosk-ha-login.html"
+            echo "  Then verify it is accessible at:"
+            echo "    $HA_WRAPPER_URL"
+        fi
+
+        # Point the kiosk autostart at the HA-hosted wrapper page.
         sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=$HA_WRAPPER_URL|" "$AUTOSTART_FILE"
         sed -i "s|^URL=.*|URL=$HA_WRAPPER_URL|" "$INSTALL_MARKER"
-        log "Autostart updated to use wrapper page"
+        log "Autostart updated: $HA_WRAPPER_URL"
 
-        echo -e "${CYAN}[i]${NC} Kiosk start URL updated to local wrapper:"
+        echo -e "${CYAN}[i]${NC} Kiosk will load:"
         echo "    $HA_WRAPPER_URL"
-        echo "    (auto-redirects to ${HA_URL}${HA_DASHBOARD_PATH})"
+        echo "    (injects auth token then redirects to ${HA_URL}${HA_DASHBOARD_PATH})"
         echo ""
     else
         info "No HA_TOKEN set — wrapper page skipped."
