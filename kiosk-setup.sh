@@ -33,6 +33,9 @@
 #
 #    Enable RTC shutdown/wake after adding hardware:
 #      sudo bash kiosk-setup.sh --enable-rtc
+#
+#    Update the browser_mod Browser ID (no reinstall):
+#      sudo bash kiosk-setup.sh --set-browser-id kiosk-living-room
 # =============================================================================
 
 set -e
@@ -87,6 +90,13 @@ DISPLAY_API_PORT=2701
 # Chromium profile, which is required for browser_mod to retain its device ID
 # across restarts. The profile is stored at ~/.config/chromium-kiosk.
 ENABLE_BROWSER_MOD=false
+
+# browser_mod Browser ID (pre-seeded into localStorage before Chromium loads).
+# Use a short descriptive name: "kiosk-living-room", "kiosk-kitchen", etc.
+# It becomes the HA entity ID, e.g. light.browser_mod_kiosk_living_room
+# Leave empty to auto-generate a stable UUID from the Pi serial number.
+# Update anytime with: sudo bash kiosk-setup.sh --set-browser-id NEW_ID
+BROWSER_MOD_ID=""
 
 # Waveshare 10.1DP-CAPLCD display support.
 # Set to true if you are using the Waveshare 10.1inch DP CAPLCD display.
@@ -148,7 +158,7 @@ SHUTDOWN_MINUTE_PAD=$(printf '%02d' "$SHUTDOWN_MINUTE")
 WAKE_MINUTE_PAD=$(printf '%02d' "$WAKE_MINUTE")
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--factory-reset|--reset|--update-url|--set-token|--enable-rtc] <args>"
+[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--factory-reset|--reset|--update-url|--set-token|--set-browser-id|--enable-rtc] <args>"
 command -v raspi-config &>/dev/null || err "This doesn't look like a Raspberry Pi. Aborting."
 
 # =============================================================================
@@ -537,6 +547,98 @@ if [[ "$1" == "--set-token" ]]; then
 fi
 
 # =============================================================================
+#  --set-browser-id -- update the browser_mod Browser ID without reinstalling
+# =============================================================================
+_write_bmod_preloader() {
+    local BM_ID="$1"
+    local WRAPPER="$KIOSK_HOME/kiosk-ha-login.html"
+    # If no HA wrapper exists, update the autostart URL to point to a
+    # standalone pre-loader that seeds the ID then redirects to the dashboard.
+    local PRELOADER="$KIOSK_HOME/kiosk-bmod-preloader.html"
+    cat > "$PRELOADER" << HTMLEOF
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Loading...</title>
+<style>body{margin:0;background:#000;display:flex;align-items:center;
+justify-content:center;height:100vh;font-family:sans-serif;}
+.msg{color:#4fc3f7;font-size:1.1rem;opacity:0;animation:f .5s ease .2s forwards;}
+@keyframes f{to{opacity:1;}}</style></head>
+<body><p class="msg">Starting kiosk...</p>
+<script>
+(function(){
+  var BMID = "$BM_ID";
+  var TARGET = "$(grep "KIOSK_URL_VALUE=" "$AUTOSTART_FILE" 2>/dev/null | head -1 | sed "s/.*KIOSK_URL_VALUE=//" || echo "$KIOSK_URL")";
+  try { localStorage.setItem("browser_mod-browser-id", BMID); } catch(e){}
+  window.location.replace(TARGET);
+})();
+</script></body></html>
+HTMLEOF
+    chown "$KIOSK_USER:$KIOSK_USER" "$PRELOADER"
+    # Update autostart to launch the preloader
+    sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=file://$PRELOADER|" "$AUTOSTART_FILE"
+    sed -i "s|^URL=.*|URL=file://$PRELOADER|" "$INSTALL_MARKER"
+}
+
+if [[ "$1" == "--set-browser-id" ]]; then
+    NEW_BM_ID="${2:-}"
+    [[ -z "$NEW_BM_ID" ]]        && err "Usage: sudo bash $0 --set-browser-id YOUR_BROWSER_ID"
+    [[ ! -f "$INSTALL_MARKER" ]] && err "Kiosk not yet installed. Run a full install first."
+
+    if ! grep -q "^BROWSER_MOD=true" "$INSTALL_MARKER" 2>/dev/null; then
+        err "browser_mod was not enabled during install. Re-run with ENABLE_BROWSER_MOD=true."
+    fi
+
+    WRAPPER="$KIOSK_HOME/kiosk-ha-login.html"
+    PRELOADER="$KIOSK_HOME/kiosk-bmod-preloader.html"
+    BM_ID_FILE="/etc/kiosk-browser-mod-id"
+
+    hr; banner "  browser_mod Browser ID Update"; hr; echo ""
+    info "New Browser ID : $NEW_BM_ID"
+
+    UPDATED=false
+    # Try HA wrapper page first
+    if [[ -f "$WRAPPER" ]]; then
+        sed -i "s|var BROWSER_MOD_ID = \".*\";|var BROWSER_MOD_ID = \"$NEW_BM_ID\";|" "$WRAPPER"
+        grep -q "$NEW_BM_ID" "$WRAPPER" && { log "Updated in HA wrapper: $WRAPPER"; UPDATED=true; }
+    fi
+    # Try standalone preloader
+    if [[ -f "$PRELOADER" ]]; then
+        sed -i "s|var BMID = \".*\";|var BMID = \"$NEW_BM_ID\";|" "$PRELOADER"
+        grep -q "$NEW_BM_ID" "$PRELOADER" && { log "Updated in preloader: $PRELOADER"; UPDATED=true; }
+    fi
+    # Neither exists -- create a standalone preloader
+    if ! $UPDATED; then
+        _write_bmod_preloader "$NEW_BM_ID"
+        log "Standalone preloader created: $PRELOADER"
+        UPDATED=true
+    fi
+
+    # Persist to dedicated file and install marker
+    echo "$NEW_BM_ID" > "$BM_ID_FILE"
+    chmod 644 "$BM_ID_FILE"
+    if grep -q "^BROWSER_MOD_ID=" "$INSTALL_MARKER"; then
+        sed -i "s|^BROWSER_MOD_ID=.*|BROWSER_MOD_ID=$NEW_BM_ID|" "$INSTALL_MARKER"
+    else
+        echo "BROWSER_MOD_ID=$NEW_BM_ID" >> "$INSTALL_MARKER"
+    fi
+    log "Browser ID stored in $BM_ID_FILE"
+
+    echo ""
+    warn "Restart Chromium to apply (watchdog relaunches automatically):"
+    echo "    sudo pkill chromium"
+    echo ""
+    info "HA entity IDs for this kiosk:"
+    echo "    light.browser_mod_$(echo "$NEW_BM_ID" | tr '-' '_')"
+    echo "    media_player.browser_mod_$(echo "$NEW_BM_ID" | tr '-' '_')"
+    echo ""
+    info "To retrieve the stored ID later:"
+    echo "    cat /etc/kiosk-browser-mod-id"
+    echo "    grep BROWSER_MOD_ID /etc/kiosk-installed"
+    echo ""
+    exit 0
+fi
+
+# =============================================================================
 #  --factory-reset — strip device to bare minimum, wipe all user data, reinstall
 # =============================================================================
 # SAFE CONSTRAINTS (since Pi may be wall-mounted with no physical SD access):
@@ -740,11 +842,19 @@ _reset_kiosk() {
         log "Removed and disabled: kiosk-inhibit.service"
     fi
 
-    # ── HA wrapper page ─────────────────────────────────────────────────────
-    local HA_WRAPPER="$TARGET_HOME/kiosk-ha-login.html"
-    if [[ -f "$HA_WRAPPER" ]]; then
-        rm -f "$HA_WRAPPER"
-        log "Removed: $HA_WRAPPER"
+    # ── HA wrapper + browser_mod preloader pages ─────────────────────────────
+    for f in         "$TARGET_HOME/kiosk-ha-login.html"         "$TARGET_HOME/kiosk-bmod-preloader.html"; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f"
+            log "Removed: $f"
+        fi
+    done
+
+    # ── browser_mod ID file + Chromium persistent profile ───────────────────
+    [[ -f /etc/kiosk-browser-mod-id ]] && rm -f /etc/kiosk-browser-mod-id         && log "Removed: /etc/kiosk-browser-mod-id"
+    if [[ -d "$TARGET_HOME/.config/chromium-kiosk" ]]; then
+        rm -rf "$TARGET_HOME/.config/chromium-kiosk"
+        log "Removed: ~/.config/chromium-kiosk (browser_mod persistent profile)"
     fi
 
     # ── Display API ────────────────────────────────────────────────────────────────
@@ -1397,6 +1507,7 @@ HA_AUTO_LOGIN=$HA_AUTO_LOGIN
 DISPLAY_API=$ENABLE_DISPLAY_API
 DISPLAY_API_PORT=$DISPLAY_API_PORT
 BROWSER_MOD=$ENABLE_BROWSER_MOD
+BROWSER_MOD_ID=$BROWSER_MOD_ID
 WAVESHARE_10DP=$WAVESHARE_10DP
 INSTALLED_PKGS=${INSTALLED_PKGS[*]}
 EOF
@@ -1504,6 +1615,13 @@ _setup_ha_autologin() {
         // localStorage unavailable on file:// — fall through to direct redirect
       }
 
+      // Pre-seed the browser_mod Browser ID so it registers with a known,
+      // stable identity rather than a random UUID on every fresh profile.
+      var BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
+      if (BROWSER_MOD_ID) {
+        try { localStorage.setItem("browser_mod-browser-id", BROWSER_MOD_ID); } catch(e) {}
+      }
+
       // Navigate to HA dashboard. Trusted Networks handles auth server-side;
       // the localStorage token is a belt-and-suspenders fallback.
       window.location.replace(HA_URL + HA_PATH);
@@ -1537,6 +1655,36 @@ if $HA_AUTO_LOGIN; then
     _setup_ha_autologin
 else
     info "HA auto-login disabled (HA_AUTO_LOGIN=false). Set to true to enable."
+fi
+
+# If browser_mod is enabled but HA wrapper was NOT generated (no HA_AUTO_LOGIN),
+# create a standalone preloader that seeds the Browser ID then redirects.
+if $ENABLE_BROWSER_MOD && ! $HA_AUTO_LOGIN; then
+    PRELOADER_PATH="$KIOSK_HOME/kiosk-bmod-preloader.html"
+    log "Creating standalone browser_mod ID preloader..."
+    cat > "$PRELOADER_PATH" << HTMLEOF
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Loading...</title>
+<style>body{margin:0;background:#000;display:flex;align-items:center;
+justify-content:center;height:100vh;font-family:sans-serif;}
+.msg{color:#4fc3f7;font-size:1.1rem;opacity:0;animation:f .5s ease .2s forwards;}
+@keyframes f{to{opacity:1;}}</style></head>
+<body><p class="msg">Starting kiosk...</p>
+<script>
+(function(){
+  var BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
+  var TARGET         = "${KIOSK_URL}";
+  if (BROWSER_MOD_ID) {
+    try { localStorage.setItem("browser_mod-browser-id", BROWSER_MOD_ID); } catch(e) {}
+  }
+  window.location.replace(TARGET);
+})();
+</script></body></html>
+HTMLEOF
+    chown "$KIOSK_USER:$KIOSK_USER" "$PRELOADER_PATH"
+    sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=file://$PRELOADER_PATH|" "$AUTOSTART_FILE"
+    sed -i "s|^URL=.*|URL=file://$PRELOADER_PATH|" "$INSTALL_MARKER"
+    log "Autostart updated to use browser_mod preloader"
 fi
 
 # ── 14. Bloat removal + apt cleanup ───────────────────────────────────────────────
@@ -1736,6 +1884,27 @@ if $ENABLE_BROWSER_MOD; then
     mkdir -p "$KIOSK_HOME/.config/chromium-kiosk"
     chown -R "$KIOSK_USER:$KIOSK_USER" "$KIOSK_HOME/.config/chromium-kiosk"
     log "Persistent Chromium profile directory created: ~/.config/chromium-kiosk"
+
+    # Resolve the Browser ID: use BROWSER_MOD_ID if set, else derive a stable
+    # UUID from the Pi serial number so it survives reinstalls on the same Pi.
+    if [[ -z "$BROWSER_MOD_ID" ]]; then
+        PI_SERIAL=$(grep Serial /proc/cpuinfo 2>/dev/null | awk "{print \$3}" | tail -1)
+        if [[ -n "$PI_SERIAL" ]]; then
+            # Derive a deterministic UUID-like ID from the serial
+            BROWSER_MOD_ID="kiosk-$(echo "$PI_SERIAL" | tail -c 9 | tr '[:upper:]' '[:lower:]')"
+        else
+            # Fallback: random UUID
+            BROWSER_MOD_ID="kiosk-$(cat /proc/sys/kernel/random/uuid | cut -d- -f1-2)"
+        fi
+        log "Auto-generated Browser ID from Pi serial: $BROWSER_MOD_ID"
+    else
+        log "Using configured Browser ID: $BROWSER_MOD_ID"
+    fi
+
+    # Store the resolved ID in a dedicated file for easy retrieval
+    echo "$BROWSER_MOD_ID" > /etc/kiosk-browser-mod-id
+    chmod 644 /etc/kiosk-browser-mod-id
+    log "Browser ID stored in /etc/kiosk-browser-mod-id"
     echo ""
     warn "browser_mod requires manual setup steps after reboot:"
     echo ""
@@ -1779,6 +1948,10 @@ echo -e "  ${CYAN}OSK            :${NC} $([ "$ENABLE_OSK" = true ] && echo "Enab
 echo -e "  ${CYAN}HA Auto-login  :${NC} $(${HA_AUTO_LOGIN} && echo "Enabled (${HA_URL})" || echo "Disabled")"
 echo -e "  ${CYAN}Display API    :${NC} $(${ENABLE_DISPLAY_API} && echo "Enabled (port ${DISPLAY_API_PORT})" || echo "Disabled")"
 echo -e "  ${CYAN}browser_mod    :${NC} $(${ENABLE_BROWSER_MOD} && echo "Enabled (persistent profile)" || echo "Disabled")"
+if $ENABLE_BROWSER_MOD; then
+    echo -e "  ${CYAN}  Browser ID   :${NC} $BROWSER_MOD_ID"
+    echo -e "  ${CYAN}  ID file      :${NC} /etc/kiosk-browser-mod-id  (cat to retrieve)"
+fi
 echo -e "  ${CYAN}Waveshare 10DP :${NC} $(${WAVESHARE_10DP} && echo "Configured (1280x800 DDC/CI)" || echo "Not configured")"
 echo -e "  ${CYAN}Watchdog       :${NC} $($HAS_HW_WATCHDOG && echo "Hardware (15s)" || echo "None — software-only")"
 echo -e "  ${CYAN}Logs           :${NC} /var/log/kiosk.log"

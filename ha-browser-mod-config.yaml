@@ -10,20 +10,28 @@
 #       HA → Browser Mod panel (sidebar) → note the ID next to your kiosk
 #       It looks like: a1b2c3d4-e5f6a7b8
 #
-#  Replace KIOSK_BROWSER_ID throughout with your actual Browser ID.
+#  BROWSER ID — if you set BROWSER_MOD_ID in kiosk-setup.sh (recommended),
+#  your Browser ID is predictable. For BROWSER_MOD_ID="kiosk-living-room":
+#    Entity IDs: light.browser_mod_kiosk_living_room
+#                media_player.browser_mod_kiosk_living_room
+#
+#  Retrieve the stored ID from the Pi anytime:
+#    cat /etc/kiosk-browser-mod-id
+#
+#  Replace KIOSK_BROWSER_ID throughout with your actual ID (e.g. kiosk-living-room).
 #  Replace KIOSK_IP and KIOSK_API_PORT if using the display API alongside browser_mod.
 #
 #  browser_mod services used here:
-#    browser_mod.popup      — show a card as a popup dialog
+#    browser_mod.popup       — show a card as a popup dialog
 #    browser_mod.close_popup — close any open popup
-#    browser_mod.navigate   — navigate to a different dashboard URL
-#    browser_mod.sequence   — chain multiple browser_mod actions
+#    browser_mod.navigate    — navigate to a different dashboard URL
 #
-#  browser_mod light entity:
-#    light.browser_mod_KIOSK_BROWSER_ID   — software overlay (CSS black box)
-#    This is NOT hardware brightness. Use it for visual blackout/screensaver.
+#  browser_mod light entity (light.browser_mod_KIOSK_BROWSER_ID):
+#    CSS black overlay drawn over the page — NOT hardware brightness control.
+#    Turn off = full black overlay (screen appears off, Pi stays running).
+#    Brightness = overlay transparency (100% = no overlay, 0% = pitch black).
 #    For real hardware brightness on the Waveshare display, use the display API
-#    (see ha-display-config.yaml) alongside browser_mod.
+#    (ha-display-config.yaml) alongside browser_mod.
 # =============================================================================
 
 

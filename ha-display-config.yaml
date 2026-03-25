@@ -67,25 +67,34 @@ sensor:
 
 
 # =============================================================================
-#  NUMBER ENTITY — brightness slider (shows in HA dashboard as a 0-100 slider)
+#  INPUT NUMBER — brightness slider (0-100, step 5)
+#  Add to configuration.yaml. An automation (below) applies changes to hardware.
+#  This pattern is compatible with all current HA versions.
 # =============================================================================
-number:
+input_number:
+  kiosk_brightness_slider:
+    name: "Kiosk Brightness"
+    initial: 100
+    min: 0
+    max: 100
+    step: 5
+    unit_of_measurement: "%"
+    icon: mdi:brightness-6
 
-  - platform: template
-    numbers:
-      kiosk_brightness:
-        friendly_name: "Kiosk Brightness"
-        unique_id: kiosk_brightness_number
-        min: 0
-        max: 100
-        step: 5
-        unit_of_measurement: "%"
-        icon_template: mdi:brightness-6
-        value_template: "{{ states('sensor.kiosk_brightness') | int(50) }}"
-        set_value:
-          service: rest_command.kiosk_set_brightness
-          data:
-            brightness: "{{ value | int }}"
+# =============================================================================
+#  AUTOMATION — apply input_number changes to the display API
+#  Add to automations.yaml
+# =============================================================================
+#
+#  - alias: "Kiosk — Apply brightness slider"
+#    id: kiosk_apply_brightness_slider
+#    trigger:
+#      - platform: state
+#        entity_id: input_number.kiosk_brightness_slider
+#    action:
+#      - service: rest_command.kiosk_set_brightness
+#        data:
+#          brightness: "{{ states('input_number.kiosk_brightness_slider') | int }}"
 
 
 # =============================================================================
@@ -118,17 +127,19 @@ switch:
 #  This lets you control the kiosk display just like a smart bulb, including
 #  from the default HA dashboard, Google Home, Alexa, etc.
 # =============================================================================
-light:
-
-  - platform: template
-    lights:
-      kiosk_display:
-        friendly_name: "Kiosk Display"
+# =============================================================================
+#  TEMPLATE LIGHT — combines hardware brightness + on/off as a single HA light
+#  Works with Google Home, Alexa, and any HA dashboard brightness card.
+#  Add to configuration.yaml under the 'template:' key (HA 2023.4+)
+# =============================================================================
+template:
+  - light:
+      - name: "Kiosk Display"
         unique_id: kiosk_display_light
-        level_template: >
-          {{ ((states('sensor.kiosk_brightness') | float(50)) / 100 * 255) | int }}
-        value_template: >
+        state: >
           {{ states('sensor.kiosk_brightness') | int(0) > 0 }}
+        brightness: >
+          {{ ((states('sensor.kiosk_brightness') | float(50)) / 100 * 255) | int }}
         turn_on:
           - service: rest_command.kiosk_screen_on
           - if:
@@ -143,8 +154,11 @@ light:
                 data:
                   brightness: 100
         turn_off:
-          service: rest_command.kiosk_screen_off
-        supports_transition: false
+          - service: rest_command.kiosk_screen_off
+        set_level:
+          - service: rest_command.kiosk_set_brightness
+            data:
+              brightness: "{{ (brightness / 255 * 100) | int }}"
 
 
 # =============================================================================
@@ -224,7 +238,7 @@ automation:
 # entities:
 #   - entity: light.kiosk_display
 #     name: Display Power & Brightness
-#   - entity: number.kiosk_brightness
+#   - entity: input_number.kiosk_brightness_slider
 #     name: Brightness
 #   - entity: switch.kiosk_screen
 #     name: Screen On/Off

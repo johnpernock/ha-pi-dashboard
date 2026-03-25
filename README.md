@@ -51,10 +51,13 @@ sudo reboot
 # Full install
 sudo bash kiosk-setup.sh https://your-dashboard.com
 
-# Wipe all existing config and reinstall fresh
+# Wipe ALL user data and non-essential packages, reinstall from scratch
+sudo bash kiosk-setup.sh --factory-reset https://your-dashboard.com
+
+# Wipe existing kiosk config and reinstall fresh (lighter than factory reset)
 sudo bash kiosk-setup.sh --reset https://your-dashboard.com
 
-# Reset only (no immediate reinstall — prompts to confirm first)
+# Reset only — no immediate reinstall (prompts to confirm first)
 sudo bash kiosk-setup.sh --reset
 
 # Update the displayed URL — no reinstall, safe to run anytime
@@ -62,6 +65,9 @@ sudo bash kiosk-setup.sh --update-url https://new-url.com
 
 # Update the HA long-lived access token — no reinstall
 sudo bash kiosk-setup.sh --set-token YOUR_NEW_TOKEN
+
+# Set or update the browser_mod Browser ID — no reinstall
+sudo bash kiosk-setup.sh --set-browser-id kiosk-living-room
 
 # Enable RTC scheduled shutdown/wake after adding RTC hardware
 sudo bash kiosk-setup.sh --enable-rtc
@@ -121,8 +127,8 @@ All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Ed
 | `ENABLE_DISPLAY_API` | `false` | Install the display brightness/power HTTP API |
 | `DISPLAY_API_PORT` | `2701` | Port the display API listens on |
 | `ENABLE_BROWSER_MOD` | `false` | Enable browser_mod compatibility (persistent Chromium profile, removes `--incognito`) |
+| `BROWSER_MOD_ID` | `""` | browser_mod Browser ID pre-seeded into localStorage. Use a descriptive name like `kiosk-living-room`. Auto-generates from Pi serial if blank. |
 | `WAVESHARE_10DP` | `false` | Auto-configure resolution and DDC/CI for the Waveshare 10.1DP-CAPLCD display |
-| `DISPLAY_API_PORT` | `2701` | Port the display API listens on |
 
 ---
 
@@ -382,23 +388,38 @@ Bookworm / Bullseye / Buster (X11):
 Both:
   ~/.config/gtk-3.0/settings.ini             GTK dark theme
   ~/.config/gtk-4.0/settings.ini             GTK4 dark theme
-  ~/kiosk-ha-login.html                      HA token wrapper page (only if HA_AUTO_LOGIN=true + token set)
+  ~/kiosk-ha-login.html                      HA token wrapper + browser_mod ID pre-seeder
+                                             (HA_AUTO_LOGIN=true + HA_TOKEN set)
+  ~/kiosk-bmod-preloader.html               Standalone browser_mod ID pre-seeder
+                                             (ENABLE_BROWSER_MOD=true, HA_AUTO_LOGIN=false)
+  ~/.config/chromium-kiosk/                  Persistent Chromium profile (ENABLE_BROWSER_MOD=true)
+  /etc/kiosk-browser-mod-id                  Stored Browser ID — cat to retrieve anytime
   /etc/X11/xorg.conf.d/10-kiosk-blanking.conf    (X11 only)
   /usr/local/bin/kiosk-shutdown.sh           (only if RTC detected)
-  ~/kiosk-ha-login.html                      HA token wrapper page (only if HA_AUTO_LOGIN=true + token set)
-  ~/.config/chromium-kiosk/                 Persistent Chromium profile (only if ENABLE_BROWSER_MOD=true)
-  /etc/kiosk-installed                       Install state marker (stores URL, OS, Pi model,
-                                             RTC/OSK/HA state, and installed package list)
-  /var/log/kiosk.log                         Runtime log
-  /etc/logrotate.d/kiosk                     Log rotation config
+  /usr/local/bin/kiosk-display-api.py        Display brightness/power API (ENABLE_DISPLAY_API=true)
+  /etc/kiosk-display.conf                    Display API runtime config
+  /etc/systemd/system/kiosk-display-api.service
+  /etc/kiosk-installed                       Install state marker (URL, OS, Pi, RTC/OSK/HA/
+                                             browser_mod/display API state, package list)
+  /var/log/kiosk.log                         Kiosk runtime log
+  /var/log/kiosk-display.log                 Display API log (ENABLE_DISPLAY_API=true)
+  /etc/logrotate.d/kiosk                     Log rotation (both logs)
   /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
+
+Repo files (used during install, kept for updates):
+  kiosk-setup.sh                             Main setup script
+  kiosk-display-api.py                       Display API source (copied to /usr/local/bin/)
+  ha-display-config.yaml                     HA config for hardware brightness control
+  ha-browser-mod-config.yaml                 HA config for browser_mod popups/navigation
 ```
 
 ---
 
 ## Display Brightness & Power Control
 
-The script optionally installs a lightweight HTTP API that lets Home Assistant control the kiosk display directly — no SSH scripting required.
+The script installs a lightweight HTTP API that gives Home Assistant full hardware control over the Waveshare (and any DDC/CI-capable) display — set brightness to any level from 0–100, or turn the backlight completely off while the Pi stays running. This is real hardware control: actual backlight current changes, not a software overlay.
+
+**Yes — HA can control brightness and backlight** via the display API + `ha-display-config.yaml`. For the Waveshare 10.1DP-CAPLCD specifically, DDC/CI over HDMI is confirmed as the correct method (`ddcutil setvcp 10 <value>`), and the script wires this up automatically when `ENABLE_DISPLAY_API=true` and `WAVESHARE_10DP=true`.
 
 ### Enabling
 
@@ -729,6 +750,12 @@ Then re-set `HA_AUTO_LOGIN=true`, `HA_URL`, and `HA_TOKEN` in the config block b
 
 ### browser_mod not registering the kiosk
 
+**Check 0 — retrieve the stored Browser ID:**
+```bash
+cat /etc/kiosk-browser-mod-id
+```
+If this file exists and has a value, that's the ID browser_mod should register with. If the file is missing, the kiosk was installed without `ENABLE_BROWSER_MOD=true`.
+
 **Check 1 — incognito mode still active:**
 Confirm `ENABLE_BROWSER_MOD=true` was set before running the install. The script switches from `--incognito` to `--user-data-dir` when enabled. Check the autostart file:
 ```bash
@@ -742,6 +769,26 @@ Confirm browser_mod is installed via HACS and the integration is added in Settin
 
 **Check 3 — kiosk not appearing in Browser Mod panel:**
 Navigate to the Browser Mod sidebar panel. If the kiosk isn't listed, reload the kiosk page (`sudo pkill chromium` — watchdog relaunches it) and wait 10 seconds.
+
+### Display API not responding
+
+```bash
+# Check the service is running
+sudo systemctl status kiosk-display-api.service
+
+# Check logs for backend detection result
+sudo journalctl -u kiosk-display-api.service | head -20
+
+# Test endpoints directly from the Pi
+curl http://localhost:2701/health
+curl http://localhost:2701/status
+curl -X POST http://localhost:2701/brightness -H "Content-Type: application/json" -d '{"value":50}'
+```
+
+If the service shows `backend: none`, DDC/CI was not detected. Follow the Waveshare DDC/CI steps below, then restart the service:
+```bash
+sudo systemctl restart kiosk-display-api.service
+```
 
 ### Waveshare display wrong resolution or no display
 
@@ -787,9 +834,33 @@ To add it to the script's removal list permanently, add its name to the `BLOAT_P
 ```bash
 # In kiosk-setup.sh, set:
 ENABLE_BROWSER_MOD=true
+BROWSER_MOD_ID="kiosk-living-room"   # pick a name — becomes the HA entity ID
 ```
 
 This removes `--incognito` and switches Chromium to a persistent profile at `~/.config/chromium-kiosk`. Without this, browser_mod cannot retain its device ID across restarts.
+
+The `BROWSER_MOD_ID` is pre-seeded into `localStorage` before the HA frontend loads, so browser_mod registers with exactly this ID every time — no random UUID, no manual copy-paste. If you leave `BROWSER_MOD_ID` empty, the script auto-generates a stable ID from the Pi's serial number so it survives reinstalls on the same hardware.
+
+The ID is stored on disk for easy retrieval:
+```bash
+cat /etc/kiosk-browser-mod-id
+# or
+grep BROWSER_MOD_ID /etc/kiosk-installed
+```
+
+To change it without reinstalling:
+```bash
+sudo bash kiosk-setup.sh --set-browser-id kiosk-bedroom
+sudo pkill chromium   # watchdog relaunches with new ID
+```
+
+**HA entity IDs are predictable** once the ID is set. For `BROWSER_MOD_ID="kiosk-living-room"`:
+```
+light.browser_mod_kiosk_living_room
+media_player.browser_mod_kiosk_living_room
+binary_sensor.browser_mod_kiosk_living_room
+```
+Use these directly in your automations — no hunting for random device IDs in the browser_mod panel.
 
 **Step 2 — Install browser_mod in HA:**
 ```
