@@ -80,6 +80,20 @@ REMOVE_BLOAT=true
 ENABLE_DISPLAY_API=false
 DISPLAY_API_PORT=2701
 
+# Enable browser_mod (HACS) compatibility.
+# browser_mod registers Chromium as a HA device, enabling popups, navigation,
+# doorbell alerts, and a software screen-blackout overlay from HA automations.
+# IMPORTANT: enabling this removes --incognito and switches to a persistent
+# Chromium profile, which is required for browser_mod to retain its device ID
+# across restarts. The profile is stored at ~/.config/chromium-kiosk.
+ENABLE_BROWSER_MOD=false
+
+# Waveshare 10.1DP-CAPLCD display support.
+# Set to true if you are using the Waveshare 10.1inch DP CAPLCD display.
+# Adds the required HDMI resolution config (1280x800) to /boot/firmware/config.txt
+# and confirms that DDC/CI brightness control via ddcutil is the correct method.
+WAVESHARE_10DP=false
+
 # =============================================================================
 #  HOME ASSISTANT AUTO-LOGIN (optional)
 # =============================================================================
@@ -1142,6 +1156,7 @@ while true; do
       --enable-features=UseOzonePlatform,WebContentsForceDark \\
       --force-dark-mode \\
       $(if $ENABLE_OSK; then echo "--enable-virtual-keyboard \\\\"; fi)
+      $(if $ENABLE_BROWSER_MOD; then echo "--user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\\\"; else echo "--incognito \\\\"; fi)
       $(echo "$CHROMIUM_MEMORY_FLAGS" | sed 's/^ *//' | tr '\n' ' ')
       --kiosk \\
       --noerrdialogs \\
@@ -1153,9 +1168,8 @@ while true; do
       --disable-extensions \\
       --disable-translate \\
       --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \\
-      --incognito \\
       --disable-session-crashed-bubble \\
-      --disable-restore-session-state \\
+      $(if ! $ENABLE_BROWSER_MOD; then echo "--disable-restore-session-state \\\\"; fi)
       --disable-save-password-bubble \\
       --disable-sync \\
       --disable-background-networking \\
@@ -1245,6 +1259,7 @@ $OSK_LINE
       --enable-features=WebContentsForceDark \
       --force-dark-mode \
       $(if $ENABLE_OSK; then echo '      --enable-virtual-keyboard \'; fi)
+      $(if $ENABLE_BROWSER_MOD; then echo "      --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo '      --incognito \'; fi)
       $(echo "$CHROMIUM_MEMORY_FLAGS" | sed 's/^ *//' | tr '\n' ' ')
       --kiosk \
       --noerrdialogs \
@@ -1256,9 +1271,8 @@ $OSK_LINE
       --disable-extensions \
       --disable-translate \
       --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
-      --incognito \
       --disable-session-crashed-bubble \
-      --disable-restore-session-state \
+      $(if ! $ENABLE_BROWSER_MOD; then echo '      --disable-restore-session-state \'; fi)
       --disable-save-password-bubble \
       --disable-sync \
       --disable-background-networking \
@@ -1380,6 +1394,10 @@ WAKE=${WAKE_HOUR}:${WAKE_MINUTE_PAD}
 RTC_ENABLED=$RTC_ENABLED
 OSK_ENABLED=$ENABLE_OSK
 HA_AUTO_LOGIN=$HA_AUTO_LOGIN
+DISPLAY_API=$ENABLE_DISPLAY_API
+DISPLAY_API_PORT=$DISPLAY_API_PORT
+BROWSER_MOD=$ENABLE_BROWSER_MOD
+WAVESHARE_10DP=$WAVESHARE_10DP
 INSTALLED_PKGS=${INSTALLED_PKGS[*]}
 EOF
 log "Install marker → $INSTALL_MARKER"
@@ -1667,6 +1685,83 @@ else
     info "Display API disabled (ENABLE_DISPLAY_API=false). Set to true to enable."
 fi
 
+# ── 16. Waveshare 10.1DP-CAPLCD display configuration ───────────────────────────
+if $WAVESHARE_10DP; then
+    log "Configuring Waveshare 10.1DP-CAPLCD display (1280x800)..."
+    BOOT_CFG=""
+    [[ -f /boot/firmware/config.txt ]] && BOOT_CFG=/boot/firmware/config.txt
+    [[ -z "$BOOT_CFG" && -f /boot/config.txt ]] && BOOT_CFG=/boot/config.txt
+
+    if [[ -n "$BOOT_CFG" ]]; then
+        if ! grep -q "hdmi_cvt 1280 800" "$BOOT_CFG"; then
+            cat >> "$BOOT_CFG" << 'DISPLAYCFG'
+
+# Waveshare 10.1DP-CAPLCD -- 1280x800 HDMI display
+hdmi_group=2
+hdmi_mode=87
+hdmi_cvt 1280 800 60 6 0 0 0
+hdmi_drive=1
+DISPLAYCFG
+            log "Waveshare resolution config added to $BOOT_CFG (takes effect after reboot)"
+        else
+            log "Waveshare resolution config already present in $BOOT_CFG"
+        fi
+    else
+        warn "config.txt not found -- add the following manually:"
+        echo "    hdmi_group=2"
+        echo "    hdmi_mode=87"
+        echo "    hdmi_cvt 1280 800 60 6 0 0 0"
+        echo "    hdmi_drive=1"
+    fi
+
+    # ddcutil is required for DDC/CI brightness control on this display
+    if ! command -v ddcutil &>/dev/null; then
+        log "Installing ddcutil for Waveshare DDC/CI brightness control..."
+        apt-get install -y -qq ddcutil 2>/dev/null             || warn "ddcutil install failed -- brightness control via HA will be unavailable."
+    else
+        log "ddcutil already installed"
+    fi
+
+    echo ""
+    info "Waveshare 10.1DP-CAPLCD uses DDC/CI for brightness (no sysfs backlight)."
+    info "After reboot, verify with:  sudo ddcutil detect"
+    info "Test brightness:            sudo ddcutil setvcp 10 50"
+    echo ""
+else
+    info "Waveshare 10.1DP-CAPLCD config skipped (WAVESHARE_10DP=false)"
+fi
+
+# ── 17. browser_mod persistent profile ──────────────────────────────────────────
+if $ENABLE_BROWSER_MOD; then
+    mkdir -p "$KIOSK_HOME/.config/chromium-kiosk"
+    chown -R "$KIOSK_USER:$KIOSK_USER" "$KIOSK_HOME/.config/chromium-kiosk"
+    log "Persistent Chromium profile directory created: ~/.config/chromium-kiosk"
+    echo ""
+    warn "browser_mod requires manual setup steps after reboot:"
+    echo ""
+    echo "  1. Install browser_mod via HACS:"
+    echo "       HA -> HACS -> Integrations -> Search 'Browser Mod' -> Download"
+    echo "       HA -> Settings -> Devices & Services -> Add Integration -> Browser Mod"
+    echo "       Restart HA when prompted."
+    echo ""
+    echo "  2. After kiosk reboots and Chromium loads your dashboard:"
+    echo "       HA -> Browser Mod panel (sidebar)"
+    echo "       The kiosk will appear in the registered browsers list automatically."
+    echo "       Note the Browser ID -- you need it to target this kiosk in automations."
+    echo ""
+    echo "  3. In the Browser Mod panel for this kiosk, enable:"
+    echo "       - 'Hide sidebar' (keeps the kiosk clean)"
+    echo "       - 'Lock screen' (optional -- prevents navigating away)"
+    echo ""
+    echo "  4. See ha-browser-mod-config.yaml in the repo for automation examples:"
+    echo "       - Doorbell camera popup"
+    echo "       - Navigate to a different dashboard from HA"
+    echo "       - Show alert notifications"
+    echo "       - Software screen blackout (overlay)"
+    echo "       - Combined hardware brightness + software overlay"
+    echo ""
+fi
+
 # =============================================================================
 #  Summary
 # =============================================================================
@@ -1683,6 +1778,8 @@ echo -e "  ${CYAN}Dark mode      :${NC} Forced (GTK + Chromium)"
 echo -e "  ${CYAN}OSK            :${NC} $([ "$ENABLE_OSK" = true ] && echo "Enabled ($OSK_PKG)" || echo "Disabled")"
 echo -e "  ${CYAN}HA Auto-login  :${NC} $(${HA_AUTO_LOGIN} && echo "Enabled (${HA_URL})" || echo "Disabled")"
 echo -e "  ${CYAN}Display API    :${NC} $(${ENABLE_DISPLAY_API} && echo "Enabled (port ${DISPLAY_API_PORT})" || echo "Disabled")"
+echo -e "  ${CYAN}browser_mod    :${NC} $(${ENABLE_BROWSER_MOD} && echo "Enabled (persistent profile)" || echo "Disabled")"
+echo -e "  ${CYAN}Waveshare 10DP :${NC} $(${WAVESHARE_10DP} && echo "Configured (1280x800 DDC/CI)" || echo "Not configured")"
 echo -e "  ${CYAN}Watchdog       :${NC} $($HAS_HW_WATCHDOG && echo "Hardware (15s)" || echo "None — software-only")"
 echo -e "  ${CYAN}Logs           :${NC} /var/log/kiosk.log"
 echo ""

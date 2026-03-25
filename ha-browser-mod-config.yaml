@@ -1,0 +1,382 @@
+# =============================================================================
+#  ha-browser-mod-config.yaml
+#  Home Assistant configuration snippets for browser_mod kiosk integration.
+#
+#  Prerequisites:
+#    1. browser_mod installed via HACS and added as an integration in HA
+#    2. Kiosk built with ENABLE_BROWSER_MOD=true in kiosk-setup.sh
+#    3. Kiosk has booted and Chromium has loaded — it auto-registers with browser_mod
+#    4. Find the kiosk Browser ID:
+#       HA → Browser Mod panel (sidebar) → note the ID next to your kiosk
+#       It looks like: a1b2c3d4-e5f6a7b8
+#
+#  Replace KIOSK_BROWSER_ID throughout with your actual Browser ID.
+#  Replace KIOSK_IP and KIOSK_API_PORT if using the display API alongside browser_mod.
+#
+#  browser_mod services used here:
+#    browser_mod.popup      — show a card as a popup dialog
+#    browser_mod.close_popup — close any open popup
+#    browser_mod.navigate   — navigate to a different dashboard URL
+#    browser_mod.sequence   — chain multiple browser_mod actions
+#
+#  browser_mod light entity:
+#    light.browser_mod_KIOSK_BROWSER_ID   — software overlay (CSS black box)
+#    This is NOT hardware brightness. Use it for visual blackout/screensaver.
+#    For real hardware brightness on the Waveshare display, use the display API
+#    (see ha-display-config.yaml) alongside browser_mod.
+# =============================================================================
+
+
+# =============================================================================
+#  AUTOMATIONS
+#  Paste into automations.yaml or create via HA automation editor.
+# =============================================================================
+automation:
+
+  # ---------------------------------------------------------------------------
+  #  Doorbell camera popup
+  #  When the doorbell rings, show the front door camera feed fullscreen.
+  #  Replace 'binary_sensor.doorbell' and 'camera.front_door' with your entities.
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Doorbell popup"
+    id: kiosk_doorbell_popup
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.doorbell    # replace with your doorbell sensor
+        to: "on"
+    action:
+      - service: browser_mod.popup
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          title: "Someone at the door"
+          dismissable: true
+          timeout: 30000    # auto-close after 30 seconds
+          right_button: "Dismiss"
+          content:
+            type: picture-glance
+            entity: camera.front_door        # replace with your camera entity
+            camera_view: live
+            entities:
+              - entity: lock.front_door      # optional: add a lock button
+                icon: mdi:lock
+
+  # ---------------------------------------------------------------------------
+  #  Motion alert popup
+  #  Show a popup when motion is detected at a specific location.
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Motion alert popup"
+    id: kiosk_motion_popup
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.front_yard_motion   # replace with your sensor
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: group.all_people
+        state: "not_home"
+    action:
+      - service: browser_mod.popup
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          title: "Motion detected"
+          dismissable: true
+          timeout: 15000
+          content:
+            type: markdown
+            content: |
+              ## ⚠️ Motion Detected
+              Front yard camera detected motion while nobody is home.
+
+  # ---------------------------------------------------------------------------
+  #  Navigate to a different dashboard on an event
+  #  For example: show a weather view when it starts raining.
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Navigate on rain"
+    id: kiosk_navigate_rain
+    trigger:
+      - platform: state
+        entity_id: weather.home
+        attribute: precipitation
+        above: 0
+    action:
+      - service: browser_mod.navigate
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          path: /lovelace/weather      # replace with your dashboard path
+
+  # ---------------------------------------------------------------------------
+  #  Navigate back to the main dashboard after a delay
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Return to main dashboard"
+    id: kiosk_return_main
+    trigger:
+      - platform: time_pattern
+        minutes: "/15"    # every 15 minutes
+    action:
+      - service: browser_mod.navigate
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          path: /lovelace/0    # replace with your main dashboard path
+
+  # ---------------------------------------------------------------------------
+  #  Software blackout (CSS overlay) when nobody is home
+  #  browser_mod covers the screen with a dark overlay — not hardware off.
+  #  Pair with the display API screen/off for true power saving.
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Software blackout when away"
+    id: kiosk_blackout_away
+    trigger:
+      - platform: state
+        entity_id: group.all_people
+        to: "not_home"
+        for: "00:05:00"
+    action:
+      # First: software overlay via browser_mod (instant visual blackout)
+      - service: light.turn_off
+        target:
+          entity_id: light.browser_mod_KIOSK_BROWSER_ID
+      # Then: actual hardware screen off via display API (saves power)
+      - service: rest_command.kiosk_screen_off
+
+  # ---------------------------------------------------------------------------
+  #  Restore screen when someone arrives home
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Restore screen when home"
+    id: kiosk_restore_home
+    trigger:
+      - platform: state
+        entity_id: group.all_people
+        to: "home"
+    action:
+      # Hardware screen on first
+      - service: rest_command.kiosk_screen_on
+      # Small delay for display to wake
+      - delay: "00:00:02"
+      # Restore full brightness
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 100
+      # Remove software overlay
+      - service: light.turn_on
+        target:
+          entity_id: light.browser_mod_KIOSK_BROWSER_ID
+        data:
+          brightness_pct: 100
+
+  # ---------------------------------------------------------------------------
+  #  Adaptive night dimming — combines hardware brightness (DDC/CI) and
+  #  browser_mod overlay for a smooth dim-to-dark sequence.
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Dim at night (hardware + overlay)"
+    id: kiosk_dim_night_combined
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    action:
+      # Step 1: reduce hardware brightness to 20% via display API
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 20
+      # Step 2: apply a semi-transparent overlay via browser_mod (optional extra dim)
+      - service: light.turn_on
+        target:
+          entity_id: light.browser_mod_KIOSK_BROWSER_ID
+        data:
+          brightness_pct: 30    # 30% means 70% overlay darkness
+
+  # ---------------------------------------------------------------------------
+  #  Full-brightness restore in the morning
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Full brightness morning"
+    id: kiosk_full_brightness_morning
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      # Remove overlay first
+      - service: light.turn_on
+        target:
+          entity_id: light.browser_mod_KIOSK_BROWSER_ID
+        data:
+          brightness_pct: 100
+      # Restore hardware brightness
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 100
+
+  # ---------------------------------------------------------------------------
+  #  Alarm / alert — flash the screen and show a critical popup.
+  #  Useful for smoke detector, CO alarm, etc.
+  # ---------------------------------------------------------------------------
+  - alias: "Kiosk — Critical alert popup"
+    id: kiosk_critical_alert
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.smoke_detector    # replace with your sensor
+        to: "on"
+    action:
+      # Turn display fully on first
+      - service: rest_command.kiosk_screen_on
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 100
+      # Remove any overlay
+      - service: light.turn_on
+        target:
+          entity_id: light.browser_mod_KIOSK_BROWSER_ID
+        data:
+          brightness_pct: 100
+      # Show non-dismissable alert popup
+      - service: browser_mod.popup
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          title: "🚨 SMOKE DETECTED"
+          dismissable: false    # cannot be dismissed — stays until automation clears it
+          content:
+            type: markdown
+            content: |
+              ## ⚠️ SMOKE ALARM ACTIVE
+              Check the property immediately and evacuate if necessary.
+              Call emergency services if needed: **999 / 911**
+
+
+# =============================================================================
+#  SCRIPTS
+#  Reusable building blocks for use in automations and dashboard buttons.
+# =============================================================================
+script:
+
+  # Show any HA card as a popup on the kiosk (call with card: YAML)
+  kiosk_show_popup:
+    alias: "Kiosk — Show popup"
+    fields:
+      title:
+        description: "Popup title"
+        default: "Notification"
+      content:
+        description: "Lovelace card YAML"
+    sequence:
+      - service: browser_mod.popup
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          title: "{{ title }}"
+          dismissable: true
+          content: "{{ content }}"
+
+  # Dismiss any open popup
+  kiosk_dismiss_popup:
+    alias: "Kiosk — Dismiss popup"
+    sequence:
+      - service: browser_mod.close_popup
+        data:
+          browser_id: KIOSK_BROWSER_ID
+
+  # Navigate to a path and return to main after N minutes
+  kiosk_navigate_temporary:
+    alias: "Kiosk — Temporary navigation"
+    fields:
+      path:
+        description: "HA path to navigate to"
+        default: "/lovelace/0"
+      return_after_minutes:
+        description: "Minutes before returning to main dashboard"
+        default: 5
+    sequence:
+      - service: browser_mod.navigate
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          path: "{{ path }}"
+      - delay: "00:{{ '%02d' | format(return_after_minutes | int) }}:00"
+      - service: browser_mod.navigate
+        data:
+          browser_id: KIOSK_BROWSER_ID
+          path: /lovelace/0
+
+
+# =============================================================================
+#  LOVELACE DASHBOARD CARD
+#  A kiosk control card you can add to any HA dashboard.
+#  Shows current brightness, screen state, and quick-action buttons.
+#
+#  Paste this into a Manual Card in your Lovelace dashboard:
+# =============================================================================
+
+# type: vertical-stack
+# title: Kiosk Control
+# cards:
+#   # Brightness slider (hardware — via display API)
+#   - type: entities
+#     title: Hardware Brightness
+#     entities:
+#       - entity: number.kiosk_brightness
+#         name: Display Brightness
+#       - entity: sensor.kiosk_brightness
+#         name: Current Level
+#       - entity: sensor.kiosk_api_health
+#         name: API Status
+#
+#   # browser_mod overlay control
+#   - type: entities
+#     title: browser_mod Overlay
+#     entities:
+#       - entity: light.browser_mod_KIOSK_BROWSER_ID
+#         name: Screen Overlay (software dim)
+#
+#   # Quick action buttons
+#   - type: horizontal-stack
+#     cards:
+#       - type: button
+#         name: Screen Off
+#         icon: mdi:monitor-off
+#         tap_action:
+#           action: call-service
+#           service: rest_command.kiosk_screen_off
+#       - type: button
+#         name: Screen On
+#         icon: mdi:monitor
+#         tap_action:
+#           action: call-service
+#           service: rest_command.kiosk_screen_on
+#       - type: button
+#         name: Main Dash
+#         icon: mdi:home
+#         tap_action:
+#           action: call-service
+#           service: browser_mod.navigate
+#           service_data:
+#             browser_id: KIOSK_BROWSER_ID
+#             path: /lovelace/0
+#       - type: button
+#         name: Dismiss
+#         icon: mdi:close
+#         tap_action:
+#           action: call-service
+#           service: browser_mod.close_popup
+#           service_data:
+#             browser_id: KIOSK_BROWSER_ID
+
+
+# =============================================================================
+#  NOTES ON browser_mod LIGHT ENTITY vs DISPLAY API
+# =============================================================================
+#
+#  browser_mod light entity (light.browser_mod_KIOSK_BROWSER_ID):
+#    - A CSS black overlay drawn OVER the page content in the browser
+#    - Works on any Chromium browser (does NOT require Fully Kiosk Browser)
+#    - turn_off = full black overlay (screen appears off, Pi still running)
+#    - brightness_pct controls overlay transparency (100% = no overlay, 0% = full black)
+#    - Useful for: screensaver effect, "screen off" appearance, partial dimming
+#    - Does NOT reduce hardware backlight — the panel still consumes full power
+#
+#  Display API (rest_command.kiosk_set_brightness, rest_command.kiosk_screen_off):
+#    - Controls the physical backlight via DDC/CI (ddcutil setvcp 10)
+#    - Reduces actual power consumption when dimmed or off
+#    - Works on Waveshare 10.1DP-CAPLCD and any DDC/CI-capable HDMI display
+#    - /screen/off cuts the backlight entirely (~750mA -> ~50mA power saving)
+#
+#  Best practice — use BOTH together:
+#    1. browser_mod overlay for instant visual response (no DDC/CI delay)
+#    2. Display API for actual power reduction after the overlay is applied
+#    See the "Software blackout" and "Adaptive night dimming" automations above.
+#
+# =============================================================================

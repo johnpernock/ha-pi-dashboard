@@ -88,6 +88,8 @@ sudo bash kiosk-setup.sh --enable-rtc
 | **Wi-Fi power-save off** | Prevents random network drops |
 | **Log rotation** | `/var/log/kiosk.log` rotated weekly, 4 weeks retained |
 | **Idempotent updates** | `--update-url` and `--enable-rtc` are safe to run at any time |
+| **browser_mod** | HACS integration compatibility — switches Chromium to a persistent profile so browser_mod can register the kiosk as a HA device (enables popups, navigation, doorbell alerts, software overlay). See `ha-browser-mod-config.yaml` |
+| **Waveshare 10.1DP-CAPLCD** | Auto-configures 1280×800 HDMI resolution in `config.txt` and confirms DDC/CI brightness path for this specific display |
 | **Display API** | Optional HTTP API (port 2701) for HA to control brightness and screen on/off; auto-detects DSI backlight or HDMI DDC/CI; exposes `/brightness`, `/screen/on`, `/screen/off`, `/status` |
 | **Factory reset** | `--factory-reset` strips the device to a bare minimum — wipes all user data (preserving `.ssh`), purges all packages installed by the script plus desktop bloat, and offers immediate fresh reinstall; SSH and networking are never touched |
 | **Package cleanup** | Removes desktop bloat (Wolfram, LibreOffice, Scratch, Thonny, games) and runs `autoremove`/`autoclean` after install; `--reset` can also uninstall exactly the packages the script added |
@@ -117,6 +119,9 @@ All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Ed
 | `HA_TOKEN` | `""` | Long-lived access token from HA Profile (leave blank for Trusted Networks only) |
 | `HA_DASHBOARD_PATH` | `/lovelace/0` | Dashboard path to open after login |
 | `ENABLE_DISPLAY_API` | `false` | Install the display brightness/power HTTP API |
+| `DISPLAY_API_PORT` | `2701` | Port the display API listens on |
+| `ENABLE_BROWSER_MOD` | `false` | Enable browser_mod compatibility (persistent Chromium profile, removes `--incognito`) |
+| `WAVESHARE_10DP` | `false` | Auto-configure resolution and DDC/CI for the Waveshare 10.1DP-CAPLCD display |
 | `DISPLAY_API_PORT` | `2701` | Port the display API listens on |
 
 ---
@@ -380,6 +385,8 @@ Both:
   ~/kiosk-ha-login.html                      HA token wrapper page (only if HA_AUTO_LOGIN=true + token set)
   /etc/X11/xorg.conf.d/10-kiosk-blanking.conf    (X11 only)
   /usr/local/bin/kiosk-shutdown.sh           (only if RTC detected)
+  ~/kiosk-ha-login.html                      HA token wrapper page (only if HA_AUTO_LOGIN=true + token set)
+  ~/.config/chromium-kiosk/                 Persistent Chromium profile (only if ENABLE_BROWSER_MOD=true)
   /etc/kiosk-installed                       Install state marker (stores URL, OS, Pi model,
                                              RTC/OSK/HA state, and installed package list)
   /var/log/kiosk.log                         Runtime log
@@ -720,6 +727,39 @@ sudo bash kiosk-setup.sh --reset https://your-new-ha-url:8123
 ```
 Then re-set `HA_AUTO_LOGIN=true`, `HA_URL`, and `HA_TOKEN` in the config block before reinstalling.
 
+### browser_mod not registering the kiosk
+
+**Check 1 — incognito mode still active:**
+Confirm `ENABLE_BROWSER_MOD=true` was set before running the install. The script switches from `--incognito` to `--user-data-dir` when enabled. Check the autostart file:
+```bash
+grep "incognito\|user-data-dir" ~/.config/labwc/autostart        # Trixie
+grep "incognito\|user-data-dir" ~/.config/lxsession/LXDE-pi/autostart  # Bookworm
+```
+If `--incognito` is still there, re-run the install with `ENABLE_BROWSER_MOD=true`.
+
+**Check 2 — browser_mod not installed in HA:**
+Confirm browser_mod is installed via HACS and the integration is added in Settings → Devices & Services.
+
+**Check 3 — kiosk not appearing in Browser Mod panel:**
+Navigate to the Browser Mod sidebar panel. If the kiosk isn't listed, reload the kiosk page (`sudo pkill chromium` — watchdog relaunches it) and wait 10 seconds.
+
+### Waveshare display wrong resolution or no display
+
+Confirm the resolution lines are in `/boot/firmware/config.txt`:
+```bash
+grep -A4 "Waveshare" /boot/firmware/config.txt
+```
+If missing, set `WAVESHARE_10DP=true` and re-run the install, then reboot.
+
+### Waveshare DDC/CI brightness not working
+
+```bash
+sudo ddcutil detect          # must show "Display 1"
+sudo modprobe i2c-dev        # load I2C module if not auto-loaded
+sudo ddcutil setvcp 10 50    # test directly
+```
+If `detect` still fails, enable DDC/CI in the display OSD: Menu button → Advanced or Settings → DDC/CI → Enable.
+
 ### Bloat removal left something behind
 
 If a package was missed (e.g. a new Pi OS image added a new bloat package), remove it manually:
@@ -728,6 +768,118 @@ sudo apt-get remove --purge <package-name>
 sudo apt-get autoremove --purge
 ```
 To add it to the script's removal list permanently, add its name to the `BLOAT_PKGS` array in `kiosk-setup.sh`.
+
+---
+
+## browser_mod Integration
+
+[browser_mod](https://github.com/thomasloven/hass-browser_mod) is a HACS integration that registers each Chromium kiosk instance as a device in HA, enabling:
+
+- **Popups** — show any HA card as a fullscreen or dialog overlay (`browser_mod.popup`)
+- **Navigation** — send the kiosk to a different dashboard from an automation (`browser_mod.navigate`)
+- **Doorbell alerts** — pop up a live camera feed when the doorbell rings
+- **Critical notifications** — non-dismissable alert overlays for smoke/CO alarms
+- **Software screen blackout** — CSS black overlay via the browser_mod `light` entity
+
+### Setup
+
+**Step 1 — Build the kiosk with browser_mod enabled:**
+```bash
+# In kiosk-setup.sh, set:
+ENABLE_BROWSER_MOD=true
+```
+
+This removes `--incognito` and switches Chromium to a persistent profile at `~/.config/chromium-kiosk`. Without this, browser_mod cannot retain its device ID across restarts.
+
+**Step 2 — Install browser_mod in HA:**
+```
+HA → HACS → Integrations → Search "Browser Mod" → Download
+HA → Settings → Devices & Services → Add Integration → Browser Mod
+Restart HA
+```
+
+**Step 3 — Register the kiosk:**
+After the kiosk reboots and Chromium loads your dashboard, the kiosk auto-registers. Go to:
+```
+HA → Browser Mod panel (sidebar)
+```
+The kiosk appears in the registered browsers list. Note the Browser ID (e.g. `a1b2c3d4-e5f6a7b8`) — you need it to target this kiosk in automations.
+
+**Step 4 — Configure the kiosk browser settings:**
+In the Browser Mod panel, click the settings icon next to the kiosk and enable:
+- **Hide sidebar** — keeps the UI clean in kiosk mode
+- **Always on top** — prevents HA dialogs from appearing behind the kiosk window
+
+**Step 5 — Add the HA configuration:**
+Use `ha-browser-mod-config.yaml` from the repo. Replace `KIOSK_BROWSER_ID` with your actual Browser ID throughout.
+
+### browser_mod light entity vs display API
+
+This is the most important thing to understand about the combined setup:
+
+| | browser_mod `light` entity | Display API (`ddcutil`) |
+|---|---|---|
+| What it does | CSS black overlay drawn in the browser | Controls physical backlight via DDC/CI |
+| Hardware power saved | ❌ No — panel still at full brightness | ✅ Yes — backlight current drops significantly |
+| Response time | Instant | ~1-2 seconds (DDC/CI latency) |
+| Works without display API | ✅ Yes | ✅ Yes (independent) |
+| Best for | Visual screensaver, partial dimming overlay | Actual power saving, true screen off |
+
+**Best practice — use both together:** browser_mod overlay for instant visual response, display API for actual power reduction. The example automations in `ha-browser-mod-config.yaml` demonstrate this pattern.
+
+### Ready-to-use automations in ha-browser-mod-config.yaml
+
+| Automation | Trigger |
+|---|---|
+| Doorbell camera popup | Doorbell binary_sensor → on |
+| Motion alert popup | Motion sensor → on, nobody home |
+| Navigate on rain | Weather precipitation > 0 |
+| Return to main dashboard | Every 15 minutes |
+| Software blackout when away | Presence group → not_home for 5 min |
+| Restore screen when home | Presence group → home |
+| Adaptive night dimming | 10 PM — hardware dim + overlay |
+| Full brightness morning | 7 AM |
+| Critical alert popup | Smoke detector → on (non-dismissable) |
+
+---
+
+## Waveshare 10.1DP-CAPLCD Display
+
+The Waveshare 10.1DP-CAPLCD is confirmed compatible with this kiosk setup. Set `WAVESHARE_10DP=true` in `kiosk-setup.sh` before running the install.
+
+### What the script configures automatically
+
+**Display resolution** — adds to `/boot/firmware/config.txt`:
+```
+hdmi_group=2
+hdmi_mode=87
+hdmi_cvt 1280 800 60 6 0 0 0
+hdmi_drive=1
+```
+This sets the correct 1280×800 resolution. Without it, the Pi may output the wrong resolution and the display will look wrong.
+
+**DDC/CI brightness** — installs `ddcutil` and confirms it is the correct brightness control method for this display. There is no sysfs backlight path for this display — DDC/CI over HDMI is the only software brightness control available.
+
+### Verify DDC/CI works after reboot
+
+```bash
+sudo ddcutil detect          # should show "Display 1"
+sudo ddcutil getvcp 10       # read current brightness value
+sudo ddcutil setvcp 10 50    # set to 50%
+```
+
+If `ddcutil detect` shows nothing, check:
+1. The HDMI cable is connected (not just USB-C power)
+2. DDC/CI is enabled in the display OSD menu (Menu button → Advanced → DDC/CI → On)
+3. Run `sudo modprobe i2c-dev` and retry
+
+### Touch screen setup
+
+The touch USB cable must be connected to a Pi USB port. It registers as a USB HID device — no driver needed on any supported OS. If touch isn't working:
+```bash
+lsusb | grep -i "waltop\|eeti\|ili"   # confirm USB HID device appears
+xinput list                             # Bookworm/X11 — confirm touch device listed
+```
 
 ---
 
