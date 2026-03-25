@@ -1012,4 +1012,4 @@ The repo is structured per-device, but for fleets of displays, a simple `deploy.
 
 ## License
 
-MIT — do whatever you want with it.
+[MIT](LICENSE) — do whatever you want with it.
