@@ -144,6 +144,24 @@ HA_TOKEN=""
 HA_DASHBOARD_PATH="/lovelace/0"
 
 # =============================================================================
+#  LOCAL OVERRIDES — kiosk.conf (optional, git-ignored)
+# =============================================================================
+# Keep your personal settings in kiosk.conf alongside this script.
+# It is sourced here, after all defaults, so your values win.
+# git pull will never overwrite it.
+#
+# Quick start:
+#   cp kiosk.conf.example kiosk.conf
+#   nano kiosk.conf
+# =============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/kiosk.conf" ]]; then
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/kiosk.conf"
+    echo "[kiosk-setup] Loaded local config: $SCRIPT_DIR/kiosk.conf"
+fi
+
+# =============================================================================
 #  Internal — do not edit below this line
 # =============================================================================
 

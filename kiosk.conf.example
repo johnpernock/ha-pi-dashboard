@@ -1,0 +1,57 @@
+# =============================================================================
+#  kiosk.conf — local configuration overrides
+# =============================================================================
+#
+#  Copy this file to kiosk.conf and set your values.
+#  This file is sourced by kiosk-setup.sh after the built-in defaults,
+#  so anything you set here overrides the script without editing it.
+#
+#  This file is listed in .gitignore — git pull will never touch it.
+#
+#  Usage:
+#    cp kiosk.conf.example kiosk.conf
+#    nano kiosk.conf
+#    sudo bash kiosk-setup.sh [URL]
+#
+#  Only set the variables you want to override — everything else falls
+#  back to the defaults in kiosk-setup.sh.
+# =============================================================================
+
+# Dashboard URL to display (can also be passed as the first argument)
+# KIOSK_URL="http://192.168.1.149:8123/dashboard-wall/home"
+
+# ── Home Assistant auto-login ─────────────────────────────────────────────────
+# HA_AUTO_LOGIN=true
+# HA_URL="http://192.168.1.149:8123"
+# HA_TOKEN="your-long-lived-token-here"
+# HA_DASHBOARD_PATH="/dashboard-wall/home"
+
+# ── browser_mod ───────────────────────────────────────────────────────────────
+# ENABLE_BROWSER_MOD=true
+# BROWSER_MOD_ID="kiosk-front-door"
+
+# ── Display API (hardware brightness control) ─────────────────────────────────
+# ENABLE_DISPLAY_API=true
+# DISPLAY_API_PORT=2701
+
+# ── Waveshare 10.1DP-CAPLCD display ──────────────────────────────────────────
+# WAVESHARE_10DP=true
+
+# ── Scheduled shutdown/wake (requires RTC hardware) ──────────────────────────
+# SHUTDOWN_HOUR=23
+# SHUTDOWN_MINUTE=0
+# WAKE_HOUR=7
+# WAKE_MINUTE=0
+
+# ── On-screen keyboard ────────────────────────────────────────────────────────
+# ENABLE_OSK=false
+
+# ── Display rotation (Trixie/Wayland only) ────────────────────────────────────
+# DISPLAY_TRANSFORM="normal"    # normal | 90 | 180 | 270
+# DISPLAY_OUTPUT="HDMI-A-1"     # run wlr-randr to find your output name
+
+# ── Auto-reload page every N seconds (0 = disabled) ──────────────────────────
+# AUTO_RELOAD_SECONDS=0
+
+# ── Remove desktop bloat during install ──────────────────────────────────────
+# REMOVE_BLOAT=true

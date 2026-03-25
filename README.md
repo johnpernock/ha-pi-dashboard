@@ -106,7 +106,16 @@ sudo bash kiosk-setup.sh --enable-rtc
 
 ## Configuration
 
-All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Edit before running.
+Settings live in a `kiosk.conf` file alongside the script — **never edit `kiosk-setup.sh` directly**. This means `git pull` will never overwrite your settings.
+
+```bash
+cp kiosk.conf.example kiosk.conf
+nano kiosk.conf
+```
+
+`kiosk.conf` is git-ignored. The script sources it after its own defaults, so anything you set there wins. Only set the variables you need — everything else falls back to the defaults in `kiosk-setup.sh`.
+
+If no `kiosk.conf` exists the script runs entirely from its built-in defaults, so it is always safe to run without one.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -407,7 +416,9 @@ Both:
   /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
 
 Repo files (used during install, kept for updates):
-  kiosk-setup.sh                             Main setup script
+  kiosk-setup.sh                             Main setup script (do not edit — use kiosk.conf)
+  kiosk.conf                                 Your local settings (git-ignored, survives pulls)
+  kiosk.conf.example                         Template — copy to kiosk.conf to get started
   kiosk-display-api.py                       Display API source (copied to /usr/local/bin/)
   ha-display-config.yaml                     HA config for hardware brightness control
   ha-browser-mod-config.yaml                 HA config for browser_mod popups/navigation
