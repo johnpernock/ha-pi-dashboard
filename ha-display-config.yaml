@@ -1,0 +1,234 @@
+# =============================================================================
+#  ha-display-config.yaml
+#  Home Assistant configuration snippets for kiosk display control.
+#
+#  Replace KIOSK_IP with your Pi's IP address (e.g. 192.168.1.50).
+#  Replace KIOSK_PORT with your API port (default: 2701).
+#
+#  Paste each section into the matching section of your configuration.yaml,
+#  then restart HA (Developer Tools → Check Configuration → Restart).
+# =============================================================================
+
+
+# =============================================================================
+#  REST COMMANDS — call these from automations, scripts, or the UI
+# =============================================================================
+rest_command:
+
+  # Set brightness (0-100)
+  kiosk_set_brightness:
+    url: "http://KIOSK_IP:KIOSK_PORT/brightness"
+    method: POST
+    content_type: "application/json"
+    payload: '{"value": {{ brightness }}}'
+
+  # Turn display off (Pi stays running — just kills the backlight)
+  kiosk_screen_off:
+    url: "http://KIOSK_IP:KIOSK_PORT/screen/off"
+    method: POST
+
+  # Turn display back on
+  kiosk_screen_on:
+    url: "http://KIOSK_IP:KIOSK_PORT/screen/on"
+    method: POST
+
+
+# =============================================================================
+#  SENSORS — read current brightness and display status
+# =============================================================================
+sensor:
+
+  - platform: rest
+    name: Kiosk Brightness
+    unique_id: kiosk_brightness_sensor
+    resource: "http://KIOSK_IP:KIOSK_PORT/brightness"
+    value_template: "{{ value_json.brightness }}"
+    unit_of_measurement: "%"
+    device_class: illuminance
+    scan_interval: 30   # seconds between polls
+
+  - platform: rest
+    name: Kiosk Display Status
+    unique_id: kiosk_display_status
+    resource: "http://KIOSK_IP:KIOSK_PORT/status"
+    value_template: "{{ value_json.backend }}"
+    json_attributes:
+      - brightness
+      - compositor
+      - output
+    scan_interval: 60
+
+  - platform: rest
+    name: Kiosk API Health
+    unique_id: kiosk_api_health
+    resource: "http://KIOSK_IP:KIOSK_PORT/health"
+    value_template: "{{ value_json.status }}"
+    scan_interval: 60
+
+
+# =============================================================================
+#  NUMBER ENTITY — brightness slider (shows in HA dashboard as a 0-100 slider)
+# =============================================================================
+number:
+
+  - platform: template
+    numbers:
+      kiosk_brightness:
+        friendly_name: "Kiosk Brightness"
+        unique_id: kiosk_brightness_number
+        min: 0
+        max: 100
+        step: 5
+        unit_of_measurement: "%"
+        icon_template: mdi:brightness-6
+        value_template: "{{ states('sensor.kiosk_brightness') | int(50) }}"
+        set_value:
+          service: rest_command.kiosk_set_brightness
+          data:
+            brightness: "{{ value | int }}"
+
+
+# =============================================================================
+#  SWITCH — screen on/off (use in automations or as a dashboard toggle)
+# =============================================================================
+switch:
+
+  - platform: template
+    switches:
+      kiosk_screen:
+        friendly_name: "Kiosk Screen"
+        unique_id: kiosk_screen_switch
+        icon_template: >
+          {% if is_state('switch.kiosk_screen', 'on') %}
+            mdi:monitor
+          {% else %}
+            mdi:monitor-off
+          {% endif %}
+        # HA has no reliable way to know if the screen is on/off without a
+        # dedicated sensor, so this switch tracks its own state optimistically.
+        value_template: "{{ is_state('switch.kiosk_screen', 'on') }}"
+        turn_on:
+          service: rest_command.kiosk_screen_on
+        turn_off:
+          service: rest_command.kiosk_screen_off
+
+
+# =============================================================================
+#  LIGHT ENTITY — combines brightness + on/off into a single HA light entity
+#  This lets you control the kiosk display just like a smart bulb, including
+#  from the default HA dashboard, Google Home, Alexa, etc.
+# =============================================================================
+light:
+
+  - platform: template
+    lights:
+      kiosk_display:
+        friendly_name: "Kiosk Display"
+        unique_id: kiosk_display_light
+        level_template: >
+          {{ ((states('sensor.kiosk_brightness') | float(50)) / 100 * 255) | int }}
+        value_template: >
+          {{ states('sensor.kiosk_brightness') | int(0) > 0 }}
+        turn_on:
+          - service: rest_command.kiosk_screen_on
+          - if:
+              - condition: template
+                value_template: "{{ brightness is defined }}"
+            then:
+              - service: rest_command.kiosk_set_brightness
+                data:
+                  brightness: "{{ (brightness / 255 * 100) | int }}"
+            else:
+              - service: rest_command.kiosk_set_brightness
+                data:
+                  brightness: 100
+        turn_off:
+          service: rest_command.kiosk_screen_off
+        supports_transition: false
+
+
+# =============================================================================
+#  AUTOMATIONS — example day/night brightness schedule
+#  Add these to your automations.yaml or paste into the HA automation editor.
+# =============================================================================
+automation:
+
+  # Dim the display at night (10 PM)
+  - alias: "Kiosk — Dim at night"
+    id: kiosk_dim_night
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    action:
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 20
+
+  # Restore brightness in the morning (7 AM)
+  - alias: "Kiosk — Bright in morning"
+    id: kiosk_bright_morning
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 100
+
+  # Turn screen off when nobody is home
+  - alias: "Kiosk — Screen off when away"
+    id: kiosk_screen_away
+    trigger:
+      - platform: state
+        entity_id: group.all_people   # replace with your presence group/person
+        to: "not_home"
+        for: "00:05:00"
+    action:
+      - service: rest_command.kiosk_screen_off
+
+  # Turn screen back on when someone arrives
+  - alias: "Kiosk — Screen on when home"
+    id: kiosk_screen_home
+    trigger:
+      - platform: state
+        entity_id: group.all_people   # replace with your presence group/person
+        to: "home"
+    action:
+      - service: rest_command.kiosk_screen_on
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 100
+
+  # Reduce brightness when sun sets (adaptive lighting alternative)
+  - alias: "Kiosk — Reduce brightness at sunset"
+    id: kiosk_sunset_dim
+    trigger:
+      - platform: sun
+        event: sunset
+        offset: "+00:30:00"
+    action:
+      - service: rest_command.kiosk_set_brightness
+        data:
+          brightness: 40
+
+
+# =============================================================================
+#  LOVELACE CARD YAML — add to your dashboard
+#  Shows brightness slider, screen toggle, and status in one card.
+# =============================================================================
+
+# Paste this into a Manual Card in your Lovelace dashboard:
+#
+# type: entities
+# title: Kiosk Display
+# entities:
+#   - entity: light.kiosk_display
+#     name: Display Power & Brightness
+#   - entity: number.kiosk_brightness
+#     name: Brightness
+#   - entity: switch.kiosk_screen
+#     name: Screen On/Off
+#   - entity: sensor.kiosk_brightness
+#     name: Current Brightness
+#   - entity: sensor.kiosk_api_health
+#     name: API Status

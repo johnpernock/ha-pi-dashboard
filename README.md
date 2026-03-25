@@ -88,6 +88,8 @@ sudo bash kiosk-setup.sh --enable-rtc
 | **Wi-Fi power-save off** | Prevents random network drops |
 | **Log rotation** | `/var/log/kiosk.log` rotated weekly, 4 weeks retained |
 | **Idempotent updates** | `--update-url` and `--enable-rtc` are safe to run at any time |
+| **Display API** | Optional HTTP API (port 2701) for HA to control brightness and screen on/off; auto-detects DSI backlight or HDMI DDC/CI; exposes `/brightness`, `/screen/on`, `/screen/off`, `/status` |
+| **Factory reset** | `--factory-reset` strips the device to a bare minimum — wipes all user data (preserving `.ssh`), purges all packages installed by the script plus desktop bloat, and offers immediate fresh reinstall; SSH and networking are never touched |
 | **Package cleanup** | Removes desktop bloat (Wolfram, LibreOffice, Scratch, Thonny, games) and runs `autoremove`/`autoclean` after install; `--reset` can also uninstall exactly the packages the script added |
 | **Clean reset** | `--reset` wipes all kiosk config (autologin, autostart, cron, watchdog, HA wrapper, LightDM) with a confirmation prompt — optionally followed by a fresh install in one command |
 | **Existing install guard** | Full install detects a previous install and prompts: reset, update URL, overwrite, or quit — no accidental overwrites |
@@ -114,12 +116,31 @@ All settings are at the top of `kiosk-setup.sh` under the **CONFIG** section. Ed
 | `HA_URL` | `http://homeassistant.local:8123` | Full URL of your HA instance |
 | `HA_TOKEN` | `""` | Long-lived access token from HA Profile (leave blank for Trusted Networks only) |
 | `HA_DASHBOARD_PATH` | `/lovelace/0` | Dashboard path to open after login |
+| `ENABLE_DISPLAY_API` | `false` | Install the display brightness/power HTTP API |
+| `DISPLAY_API_PORT` | `2701` | Port the display API listens on |
 
 ---
 
 ## Resetting an Existing Install
 
 If a kiosk is already configured and you want to start completely fresh, use `--reset`. It removes every file and setting the script created, then optionally runs a clean install immediately.
+
+### Factory Reset vs Regular Reset
+
+| | `--reset` | `--factory-reset` |
+|---|---|---|
+| Removes kiosk config files | ✅ | ✅ |
+| Removes display API | ✅ | ✅ |
+| Prompts to remove kiosk packages | ✅ | ✅ (automatic) |
+| Wipes home directory (keeps `.ssh`) | ❌ | ✅ |
+| Purges ALL desktop/bloat packages | ❌ | ✅ |
+| Clears systemd failed units | ❌ | ✅ |
+| Requires typing `FACTORY RESET` to confirm | ❌ | ✅ |
+| Safe on wall-mounted Pi (SSH/network preserved) | ✅ | ✅ |
+
+Use `--reset` when you want to change the kiosk configuration. Use `--factory-reset` when you want to return the device to a clean slate — for example, when repurposing a Pi that was previously used for something else, or when troubleshooting a deeply broken install.
+
+> **Wall-mounted Pi safety guarantee:** Neither `--reset` nor `--factory-reset` will ever touch SSH host keys, `authorized_keys`, network configuration (NetworkManager/wpa_supplicant/dhcpcd), boot config, or sudo access. The device remains fully reachable via SSH after either command completes.
 
 ### Reset + reinstall in one command
 
@@ -364,6 +385,87 @@ Both:
   /var/log/kiosk.log                         Runtime log
   /etc/logrotate.d/kiosk                     Log rotation config
   /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
+```
+
+---
+
+## Display Brightness & Power Control
+
+The script optionally installs a lightweight HTTP API that lets Home Assistant control the kiosk display directly — no SSH scripting required.
+
+### Enabling
+
+Set `ENABLE_DISPLAY_API=true` in `kiosk-setup.sh` before running (or re-running) the install. Also copy `kiosk-display-api.py` from the repo to the same directory as `kiosk-setup.sh` on the Pi.
+
+```bash
+sudo bash kiosk-setup.sh https://your-dashboard.com
+```
+
+The API starts automatically on boot via a systemd service and listens on port `2701` (configurable via `DISPLAY_API_PORT`).
+
+### Display type auto-detection
+
+| Priority | Backend | When used |
+|---|---|---|
+| 1 | **sysfs backlight** | Official Pi touchscreen (DSI), some HDMI displays with kernel backlight driver |
+| 2 | **DDC/CI via `ddcutil`** | HDMI monitors that support the DDC/CI protocol (most modern monitors) |
+| 3 | **None** | API still runs but brightness calls are no-ops; screen on/off still works via compositor |
+
+Run `ddcutil detect` after install to confirm DDC/CI is available on your display. If it shows "Display 1", brightness control will work. If not, check whether your monitor has DDC/CI enabled in its OSD menu.
+
+### API endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | `{"status": "ok", "uptime": N}` |
+| `GET` | `/status` | Backend type, current brightness, compositor, output name |
+| `GET` | `/brightness` | `{"brightness": 75}` (0–100) |
+| `POST` | `/brightness` | Body: `{"value": 75}` or query: `?value=75` |
+| `POST` | `/screen/off` | Turn display off (Pi stays fully running) |
+| `POST` | `/screen/on` | Turn display back on |
+
+### Testing the API
+
+```bash
+# From another machine on the same network:
+curl http://KIOSK_IP:2701/health
+curl http://KIOSK_IP:2701/status
+curl http://KIOSK_IP:2701/brightness
+curl -X POST http://KIOSK_IP:2701/brightness -H "Content-Type: application/json" -d '{"value": 50}'
+curl -X POST http://KIOSK_IP:2701/screen/off
+curl -X POST http://KIOSK_IP:2701/screen/on
+```
+
+### Home Assistant integration
+
+Use `ha-display-config.yaml` from the repo — it contains ready-to-paste snippets for:
+- `rest_command` entries (set brightness, screen on/off)
+- `sensor` (current brightness, display status, API health)
+- `number` entity (brightness slider 0–100 in the HA dashboard)
+- `switch` entity (screen on/off toggle)
+- `light` entity (combines brightness + on/off into a single HA light, compatible with Google Home / Alexa)
+- Example `automation` entries (dim at night, turn off when away, restore at sunrise)
+- Lovelace card YAML
+
+Replace `KIOSK_IP` and `KIOSK_PORT` in the file with your Pi's IP and API port. The script prints these values at the end of install when `ENABLE_DISPLAY_API=true`.
+
+### Troubleshooting the display API
+
+```bash
+# Check service status
+sudo systemctl status kiosk-display-api.service
+
+# Watch live logs
+sudo journalctl -fu kiosk-display-api.service
+
+# Test DDC/CI availability
+ddcutil detect
+ddcutil getvcp 10   # read current brightness
+
+# Check sysfs backlight
+ls /sys/class/backlight/
+cat /sys/class/backlight/*/brightness
+cat /sys/class/backlight/*/max_brightness
 ```
 
 ---
@@ -626,6 +728,44 @@ sudo apt-get remove --purge <package-name>
 sudo apt-get autoremove --purge
 ```
 To add it to the script's removal list permanently, add its name to the `BLOAT_PKGS` array in `kiosk-setup.sh`.
+
+---
+
+## Suggestions & Ideas
+
+Based on the full setup, here are features worth considering next:
+
+### browser_mod (HACS integration)
+Install [browser_mod](https://github.com/thomasloven/hass-browser_mod) in Home Assistant. It registers each Chromium kiosk instance as a "browser device" in HA, giving you:
+- Wake/sleep the display from HA automations
+- Navigate to a different dashboard from an HA automation (e.g. show a camera feed when a doorbell rings)
+- Show popup alerts on the kiosk screen
+- Play audio through the Pi's audio output
+No additional scripting needed — it works entirely through the HA frontend.
+
+### Screen on/off on schedule (without full shutdown)
+If you don't have an RTC module, you can still save power by turning off the display backlight at night while keeping the Pi running. The display API's `/screen/off` and `/screen/on` endpoints handle this. Pair them with the example automations in `ha-display-config.yaml`.
+
+### Read-only filesystem (SD card protection)
+Wall-mounted Pis that run 24/7 are at risk of SD card corruption on power loss. Consider overlayfs or `raspi-config → Performance → Overlay File System` to make the root filesystem read-only. The kiosk will still work normally; only logs and the install marker need write access (mount `/var/log` as a tmpfs or use a separate USB drive).
+
+### Health reporting to HA via MQTT
+A small systemd service that publishes kiosk health metrics (Chromium running, last URL loaded, uptime, CPU temp, memory usage) to an MQTT broker lets you monitor all kiosks from a single HA dashboard. Pairs well with `mosquitto` on the same Pi that runs HA.
+
+### Auto-update from git
+A weekly cron job that does `git pull && sudo bash kiosk-setup.sh --update-url "$(grep ^URL= /etc/kiosk-installed | cut -d= -f2)"` keeps the kiosk script current without manual SSH sessions.
+
+### SSH hardening
+Since these Pis are always-on and network-connected, consider:
+```bash
+# Disable password auth (key-only login)
+sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+```
+Do this only after confirming your SSH key works for login.
+
+### Multiple kiosk displays
+The repo is structured per-device, but for fleets of displays, a simple `deploy.sh` that loops over a list of Pi IPs and runs `ssh pi@IP sudo bash kiosk-setup.sh --update-url NEW_URL` makes bulk URL updates trivial.
 
 ---
 

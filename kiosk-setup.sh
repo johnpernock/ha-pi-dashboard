@@ -19,8 +19,11 @@
 #    Full install:
 #      sudo bash kiosk-setup.sh https://your-dashboard.com
 #
-#    Wipe existing config and reinstall fresh:
+#    Wipe existing kiosk config and reinstall fresh:
 #      sudo bash kiosk-setup.sh --reset https://your-dashboard.com
+#
+#    Wipe ALL user data and non-essential packages, reinstall from scratch:
+#      sudo bash kiosk-setup.sh --factory-reset https://your-dashboard.com
 #
 #    Update displayed URL (no reinstall):
 #      sudo bash kiosk-setup.sh --update-url https://new-url.com
@@ -69,6 +72,13 @@ AUTO_RELOAD_SECONDS=0
 # true  = remove them during install (saves 1-3GB+ on a full desktop image)
 # false = leave them untouched
 REMOVE_BLOAT=true
+
+# Install the display brightness/power HTTP API (port 2701 by default)
+# Enables Home Assistant to control display brightness and screen on/off.
+# Requires: ddcutil (for HDMI DDC/CI monitors) or a sysfs backlight device.
+# See ha-display-config.yaml for the matching HA configuration.
+ENABLE_DISPLAY_API=false
+DISPLAY_API_PORT=2701
 
 # =============================================================================
 #  HOME ASSISTANT AUTO-LOGIN (optional)
@@ -124,7 +134,7 @@ SHUTDOWN_MINUTE_PAD=$(printf '%02d' "$SHUTDOWN_MINUTE")
 WAKE_MINUTE_PAD=$(printf '%02d' "$WAKE_MINUTE")
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--reset|--update-url|--set-token|--enable-rtc] <args>"
+[[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 [--factory-reset|--reset|--update-url|--set-token|--enable-rtc] <args>"
 command -v raspi-config &>/dev/null || err "This doesn't look like a Raspberry Pi. Aborting."
 
 # =============================================================================
@@ -513,19 +523,180 @@ if [[ "$1" == "--set-token" ]]; then
 fi
 
 # =============================================================================
+#  --factory-reset — strip device to bare minimum, wipe all user data, reinstall
+# =============================================================================
+# SAFE CONSTRAINTS (since Pi may be wall-mounted with no physical SD access):
+#   ✓ SSH daemon, authorised keys, and sshd_config are NEVER touched
+#   ✓ Network config (NetworkManager, wpa_supplicant, dhcpcd) is NEVER touched
+#   ✓ /boot/firmware/config.txt is NEVER touched
+#   ✓ sudo access is NEVER touched
+#   Everything else is fair game.
+_factory_reset() {
+    local TARGET_USER="$1"
+    local TARGET_HOME="/home/$TARGET_USER"
+
+    hr
+    echo -e "${RED}${BOLD}"
+    echo "  ███████████████████████████████████████████████"
+    echo "   FACTORY RESET — THIS CANNOT BE UNDONE"
+    echo "  ███████████████████████████████████████████████"
+    echo -e "${NC}"
+    echo "  This will permanently:"
+    echo "    • Wipe ALL contents of $TARGET_HOME (except .ssh)"
+    echo "    • Remove all kiosk configuration files"
+    echo "    • Remove the display API if installed"
+    echo "    • Purge kiosk-installed packages and orphaned dependencies"
+    echo "    • Purge ALL known desktop/bloat packages aggressively"
+    echo "    • Reset LightDM, cron, watchdog, logrotate entries"
+    echo ""
+    echo "  This will NOT touch:"
+    echo "    • SSH daemon, host keys, or authorised_keys"
+    echo "    • Network configuration (Wi-Fi, Ethernet)"
+    echo "    • Boot config (/boot/firmware/config.txt)"
+    echo "    • sudo / PAM configuration"
+    echo "    • /var/log/kiosk.log (preserved for diagnostics)"
+    echo ""
+    warn "The Pi will still be accessible via SSH after this completes."
+    echo ""
+    echo -e "${RED}  To confirm, type exactly:  FACTORY RESET${NC}"
+    read -r -p "  Confirmation: " CONFIRM
+    if [[ "$CONFIRM" != "FACTORY RESET" ]]; then
+        echo "Confirmation did not match. Aborting."
+        exit 0
+    fi
+    echo ""
+
+    # ── Step 1: Run the standard kiosk reset (removes all config files) ─────────
+    log "Step 1/5: Removing kiosk configuration..."
+    _reset_kiosk "$TARGET_USER" --skip-confirm --skip-packages
+
+    # ── Step 2: Remove display API files ─────────────────────────────────────
+    log "Step 2/5: Removing display API..."
+    for f in         /usr/local/bin/kiosk-display-api.py         /etc/kiosk-display.conf         /etc/systemd/system/kiosk-display-api.service         /etc/logrotate.d/kiosk-display; do
+        [[ -f "$f" ]] && rm -f "$f" && log "  Removed: $f"
+    done
+    systemctl disable kiosk-display-api.service 2>/dev/null || true
+    systemctl stop    kiosk-display-api.service 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+
+    # ── Step 3: Wipe user home directory (preserve .ssh) ───────────────────────
+    log "Step 3/5: Wiping home directory (preserving .ssh)..."
+    if [[ -d "$TARGET_HOME" ]]; then
+        # Move .ssh to a temp location
+        SSH_TMP=$(mktemp -d)
+        [[ -d "$TARGET_HOME/.ssh" ]] && cp -a "$TARGET_HOME/.ssh" "$SSH_TMP/"
+
+        # Wipe everything
+        find "$TARGET_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+
+        # Restore .ssh
+        [[ -d "$SSH_TMP/.ssh" ]] && cp -a "$SSH_TMP/.ssh" "$TARGET_HOME/" &&             chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.ssh"
+        rm -rf "$SSH_TMP"
+        log "  Home directory wiped, .ssh preserved"
+    fi
+
+    # ── Step 4: Aggressive package purge ──────────────────────────────────────
+    log "Step 4/5: Purging packages..."
+    # Everything in BLOAT_PKGS plus additional desktop packages
+    FACTORY_EXTRA_PKGS=(
+        # Additional IDEs and dev tools not needed on kiosk
+        idle3 python3-idle python3-pygame python3-pil
+        # Media tools
+        vlc vlc-bin vlc-plugin-base vlc-plugin-video-output
+        gimp gimp-data audacity
+        # Pi-specific extras
+        rpi-imager
+        # Additional office/productivity
+        xpdf evince
+        # Unused desktop shell extras
+        lxtask lxrandr lxappearance
+        # Print system (no printer on a wall panel)
+        cups cups-browsed cups-client
+        # Bluetooth tools (UI)
+        blueman
+        # Additional unused services
+        avahi-daemon triggerhappy
+    )
+
+    ALL_REMOVE=("${BLOAT_PKGS[@]}" "${FACTORY_EXTRA_PKGS[@]}")
+    FOUND_PKGS=()
+    for pkg in "${ALL_REMOVE[@]}"; do
+        dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && FOUND_PKGS+=("$pkg")
+    done
+
+    if [[ ${#FOUND_PKGS[@]} -gt 0 ]]; then
+        log "  Purging ${#FOUND_PKGS[@]} packages..."
+        apt-get remove -y -qq --purge "${FOUND_PKGS[@]}" 2>/dev/null || true
+    fi
+
+    # Also remove any previously-installed kiosk packages
+    PREV_PKGS=$(grep "^INSTALLED_PKGS=" /etc/kiosk-installed 2>/dev/null | cut -d= -f2- || echo "")
+    if [[ -n "$PREV_PKGS" ]]; then
+        REMOVE_LIST=()
+        for pkg in $PREV_PKGS; do
+            dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && REMOVE_LIST+=("$pkg")
+        done
+        [[ ${#REMOVE_LIST[@]} -gt 0 ]] &&             apt-get remove -y -qq --purge "${REMOVE_LIST[@]}" 2>/dev/null || true
+    fi
+
+    apt-get autoremove -y -qq --purge 2>/dev/null || true
+    apt-get autoclean -qq 2>/dev/null || true
+    log "  Package purge complete"
+
+    # ── Step 5: Clean up system state ──────────────────────────────────────────
+    log "Step 5/5: Cleaning system state..."
+    # Clear systemd failed units
+    systemctl reset-failed 2>/dev/null || true
+    # Clear thumbnail/cache dirs
+    rm -rf /root/.cache /root/.thumbnails 2>/dev/null || true
+    # Clear apt lists to free space
+    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+    log "  System state cleaned"
+
+    echo ""
+    log "Factory reset complete."
+    info "SSH access is intact. Network config is unchanged."
+    info "/var/log/kiosk.log preserved."
+    echo ""
+}
+
+if [[ "$1" == "--factory-reset" ]]; then
+    FACTORY_URL="${2:-}"
+    _factory_reset "$KIOSK_USER"
+
+    if [[ -n "$FACTORY_URL" ]]; then
+        info "URL provided — running fresh kiosk install: $FACTORY_URL"
+        KIOSK_URL="$FACTORY_URL"
+        echo ""
+        # Fall through to full install
+    else
+        warn "Factory reset done. Run a fresh install when ready:"
+        echo "    sudo bash $0 https://your-dashboard.com"
+        echo ""
+        exit 0
+    fi
+fi
+
+# =============================================================================
 #  --reset — wipe all kiosk config and start fresh
 # =============================================================================
 _reset_kiosk() {
     local TARGET_USER="$1"
+    local SKIP_CONFIRM="${2:-}"
+    local SKIP_PACKAGES="${3:-}"
+    local TARGET_HOME="/home/$TARGET_USER"
+    local TARGET_USER="$1"
     local TARGET_HOME="/home/$TARGET_USER"
 
-    hr; banner "  Kiosk Reset — Removing All Configuration"; hr; echo ""
-    warn "This will remove ALL kiosk configuration for user: $TARGET_USER"
-    warn "Log file (/var/log/kiosk.log) will be preserved."
-    echo ""
-    read -r -p "$(echo -e "${RED}[!]${NC} Are you sure you want to wipe the kiosk config? [y/N] ")" REPLY
-    [[ "${REPLY,,}" =~ ^y ]] || { echo "Reset cancelled."; exit 0; }
-    echo ""
+    if [[ "$SKIP_CONFIRM" != "--skip-confirm" ]]; then
+        hr; banner "  Kiosk Reset — Removing All Configuration"; hr; echo ""
+        warn "This will remove ALL kiosk configuration for user: $TARGET_USER"
+        warn "Log file (/var/log/kiosk.log) will be preserved."
+        echo ""
+        read -r -p "$(echo -e "${RED}[!]${NC} Are you sure you want to wipe the kiosk config? [y/N] ")" REPLY
+        [[ "${REPLY,,}" =~ ^y ]] || { echo "Reset cancelled."; exit 0; }
+        echo ""
+    fi
 
     # ── Autostart files ──────────────────────────────────────────────────
     local LABWC_DIR="$TARGET_HOME/.config/labwc"
@@ -561,6 +732,17 @@ _reset_kiosk() {
         rm -f "$HA_WRAPPER"
         log "Removed: $HA_WRAPPER"
     fi
+
+    # ── Display API ────────────────────────────────────────────────────────────────
+    for f in         /usr/local/bin/kiosk-display-api.py         /etc/kiosk-display.conf         /etc/systemd/system/kiosk-display-api.service         /etc/logrotate.d/kiosk-display; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f"
+            log "Removed: $f"
+        fi
+    done
+    systemctl disable kiosk-display-api.service 2>/dev/null || true
+    systemctl stop    kiosk-display-api.service 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
 
     # ── Xorg blanking config ──────────────────────────────────────────────
     if [[ -f /etc/X11/xorg.conf.d/10-kiosk-blanking.conf ]]; then
@@ -606,36 +788,36 @@ _reset_kiosk() {
     fi
 
     # ── Kiosk-installed packages ───────────────────────────────────────────────
-    # Read back the package list saved at install time and remove those packages
-    local PREV_PKGS=""
-    if [[ -f /etc/kiosk-installed ]]; then
-        PREV_PKGS=$(grep "^INSTALLED_PKGS=" /etc/kiosk-installed | cut -d= -f2-)
-    fi
+    if [[ "$SKIP_PACKAGES" != "--skip-packages" ]]; then
+        local PREV_PKGS=""
+        if [[ -f /etc/kiosk-installed ]]; then
+            PREV_PKGS=$(grep "^INSTALLED_PKGS=" /etc/kiosk-installed | cut -d= -f2-)
+        fi
 
-    if [[ -n "$PREV_PKGS" ]]; then
-        echo ""
-        read -r -p "$(echo -e "${YELLOW}[?]${NC} Remove kiosk packages installed by this script? [Y/n] ")" PKG_REPLY
-        if [[ ! "${PKG_REPLY,,}" =~ ^n ]]; then
-            log "Removing kiosk packages: $PREV_PKGS"
-            # Only remove packages that are actually installed (safe if some were removed already)
-            REMOVE_LIST=()
-            for pkg in $PREV_PKGS; do
-                dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && REMOVE_LIST+=("$pkg")
-            done
-            if [[ ${#REMOVE_LIST[@]} -gt 0 ]]; then
-                apt-get remove -y -qq --purge "${REMOVE_LIST[@]}" 2>/dev/null || true
-                apt-get autoremove -y -qq --purge 2>/dev/null || true
-                apt-get autoclean -qq 2>/dev/null || true
-                log "Packages removed and orphans cleaned up"
+        if [[ -n "$PREV_PKGS" ]]; then
+            echo ""
+            read -r -p "$(echo -e "${YELLOW}[?]${NC} Remove kiosk packages installed by this script? [Y/n] ")" PKG_REPLY
+            if [[ ! "${PKG_REPLY,,}" =~ ^n ]]; then
+                log "Removing kiosk packages: $PREV_PKGS"
+                REMOVE_LIST=()
+                for pkg in $PREV_PKGS; do
+                    dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && REMOVE_LIST+=("$pkg")
+                done
+                if [[ ${#REMOVE_LIST[@]} -gt 0 ]]; then
+                    apt-get remove -y -qq --purge "${REMOVE_LIST[@]}" 2>/dev/null || true
+                    apt-get autoremove -y -qq --purge 2>/dev/null || true
+                    apt-get autoclean -qq 2>/dev/null || true
+                    log "Packages removed and orphans cleaned up"
+                else
+                    log "No tracked packages found to remove (already uninstalled)"
+                fi
             else
-                log "No tracked packages found to remove (already uninstalled)"
+                info "Package removal skipped"
             fi
         else
-            info "Package removal skipped"
+            info "No package list in install marker — skipping package removal"
+            info "(Packages can be removed manually or via apt)"
         fi
-    else
-        info "No package list in install marker — skipping package removal"
-        info "(Packages can be removed manually or via apt)"
     fi
 
     # ── Install marker ────────────────────────────────────────────────────────
@@ -1396,6 +1578,95 @@ apt-get autoremove -y -qq --purge 2>/dev/null || true
 apt-get autoclean -qq 2>/dev/null || true
 log "Package cleanup complete"
 
+# ── 15. Display brightness/power API ─────────────────────────────────────────────
+_install_display_api() {
+    log "Installing display API..."
+
+    # Install ddcutil if not present (needed for HDMI DDC/CI brightness control)
+    if ! command -v ddcutil &>/dev/null; then
+        log "Installing ddcutil (HDMI DDC/CI brightness control)..."
+        apt-get install -y -qq ddcutil 2>/dev/null ||             warn "ddcutil not available in repos — HDMI DDC/CI will be unavailable."
+    fi
+
+    # Install the API script
+    cp "$(dirname "$0")/kiosk-display-api.py" /usr/local/bin/kiosk-display-api.py         2>/dev/null || {
+        # Fallback: try the same dir as kiosk-setup.sh
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [[ -f "$SCRIPT_DIR/kiosk-display-api.py" ]]; then
+            cp "$SCRIPT_DIR/kiosk-display-api.py" /usr/local/bin/kiosk-display-api.py
+        else
+            warn "kiosk-display-api.py not found alongside kiosk-setup.sh."
+            warn "Download it from the repo and place it in the same directory, then re-run."
+            return 1
+        fi
+    }
+    chmod +x /usr/local/bin/kiosk-display-api.py
+    log "Display API script installed → /usr/local/bin/kiosk-display-api.py"
+
+    # Write display config file (read by the API at runtime)
+    cat > /etc/kiosk-display.conf << DISPLAYCONF
+[display]
+port         = $DISPLAY_API_PORT
+compositor   = $COMPOSITOR
+output       = $DISPLAY_OUTPUT
+wayland_socket = /run/user/$(id -u "$KIOSK_USER")/wayland-0
+x_display    = :0
+kiosk_user   = $KIOSK_USER
+kiosk_uid    = $(id -u "$KIOSK_USER")
+DISPLAYCONF
+    log "Display config written → /etc/kiosk-display.conf"
+
+    # Write systemd service
+    cat > /etc/systemd/system/kiosk-display-api.service << SVCEOF
+[Unit]
+Description=Kiosk Display Control API
+After=network.target multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/kiosk-display-api.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+# Run as root so it can write to sysfs backlight nodes
+User=root
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    systemctl daemon-reload
+    systemctl enable kiosk-display-api.service
+    systemctl restart kiosk-display-api.service 2>/dev/null || true
+    log "Display API service enabled and started (port $DISPLAY_API_PORT)"
+
+    # Log rotation for display API
+    cat > /etc/logrotate.d/kiosk-display << 'EOF'
+/var/log/kiosk-display.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+}
+EOF
+
+    echo ""
+    info "Display API installed. Replace KIOSK_IP and KIOSK_PORT in ha-display-config.yaml:"
+    info "  KIOSK_IP   : $(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
+    info "  KIOSK_PORT : $DISPLAY_API_PORT"
+    info "  API health : http://$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1):$DISPLAY_API_PORT/health"
+    echo ""
+}
+
+if $ENABLE_DISPLAY_API; then
+    _install_display_api
+else
+    info "Display API disabled (ENABLE_DISPLAY_API=false). Set to true to enable."
+fi
+
 # =============================================================================
 #  Summary
 # =============================================================================
@@ -1411,6 +1682,7 @@ echo -e "  ${CYAN}Kiosk URL      :${NC} $KIOSK_URL"
 echo -e "  ${CYAN}Dark mode      :${NC} Forced (GTK + Chromium)"
 echo -e "  ${CYAN}OSK            :${NC} $([ "$ENABLE_OSK" = true ] && echo "Enabled ($OSK_PKG)" || echo "Disabled")"
 echo -e "  ${CYAN}HA Auto-login  :${NC} $(${HA_AUTO_LOGIN} && echo "Enabled (${HA_URL})" || echo "Disabled")"
+echo -e "  ${CYAN}Display API    :${NC} $(${ENABLE_DISPLAY_API} && echo "Enabled (port ${DISPLAY_API_PORT})" || echo "Disabled")"
 echo -e "  ${CYAN}Watchdog       :${NC} $($HAS_HW_WATCHDOG && echo "Hardware (15s)" || echo "None — software-only")"
 echo -e "  ${CYAN}Logs           :${NC} /var/log/kiosk.log"
 echo ""
