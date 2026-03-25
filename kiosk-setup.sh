@@ -647,152 +647,6 @@ fi
 #   ✓ /boot/firmware/config.txt is NEVER touched
 #   ✓ sudo access is NEVER touched
 #   Everything else is fair game.
-_factory_reset() {
-    local TARGET_USER="$1"
-    local TARGET_HOME="/home/$TARGET_USER"
-
-    hr
-    echo -e "${RED}${BOLD}"
-    echo "  ███████████████████████████████████████████████"
-    echo "   FACTORY RESET — THIS CANNOT BE UNDONE"
-    echo "  ███████████████████████████████████████████████"
-    echo -e "${NC}"
-    echo "  This will permanently:"
-    echo "    • Wipe ALL contents of $TARGET_HOME (except .ssh)"
-    echo "    • Remove all kiosk configuration files"
-    echo "    • Remove the display API if installed"
-    echo "    • Purge kiosk-installed packages and orphaned dependencies"
-    echo "    • Purge ALL known desktop/bloat packages aggressively"
-    echo "    • Reset LightDM, cron, watchdog, logrotate entries"
-    echo ""
-    echo "  This will NOT touch:"
-    echo "    • SSH daemon, host keys, or authorised_keys"
-    echo "    • Network configuration (Wi-Fi, Ethernet)"
-    echo "    • Boot config (/boot/firmware/config.txt)"
-    echo "    • sudo / PAM configuration"
-    echo "    • /var/log/kiosk.log (preserved for diagnostics)"
-    echo ""
-    warn "The Pi will still be accessible via SSH after this completes."
-    echo ""
-    echo -e "${RED}  To confirm, type exactly:  FACTORY RESET${NC}"
-    read -r -p "  Confirmation: " CONFIRM
-    if [[ "$CONFIRM" != "FACTORY RESET" ]]; then
-        echo "Confirmation did not match. Aborting."
-        exit 0
-    fi
-    echo ""
-
-    # ── Step 1: Run the standard kiosk reset (removes all config files) ─────────
-    log "Step 1/5: Removing kiosk configuration..."
-    _reset_kiosk "$TARGET_USER" --skip-confirm --skip-packages
-
-    # ── Step 2: Remove display API files ─────────────────────────────────────
-    log "Step 2/5: Removing display API..."
-    for f in         /usr/local/bin/kiosk-display-api.py         /etc/kiosk-display.conf         /etc/systemd/system/kiosk-display-api.service         /etc/logrotate.d/kiosk-display; do
-        [[ -f "$f" ]] && rm -f "$f" && log "  Removed: $f"
-    done
-    systemctl disable kiosk-display-api.service 2>/dev/null || true
-    systemctl stop    kiosk-display-api.service 2>/dev/null || true
-    systemctl daemon-reload 2>/dev/null || true
-
-    # ── Step 3: Wipe user home directory (preserve .ssh) ───────────────────────
-    log "Step 3/5: Wiping home directory (preserving .ssh)..."
-    if [[ -d "$TARGET_HOME" ]]; then
-        # Move .ssh to a temp location
-        SSH_TMP=$(mktemp -d)
-        [[ -d "$TARGET_HOME/.ssh" ]] && cp -a "$TARGET_HOME/.ssh" "$SSH_TMP/"
-
-        # Wipe everything
-        find "$TARGET_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-
-        # Restore .ssh
-        [[ -d "$SSH_TMP/.ssh" ]] && cp -a "$SSH_TMP/.ssh" "$TARGET_HOME/" &&             chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.ssh"
-        rm -rf "$SSH_TMP"
-        log "  Home directory wiped, .ssh preserved"
-    fi
-
-    # ── Step 4: Aggressive package purge ──────────────────────────────────────
-    log "Step 4/5: Purging packages..."
-    # Everything in BLOAT_PKGS plus additional desktop packages
-    FACTORY_EXTRA_PKGS=(
-        # Additional IDEs and dev tools not needed on kiosk
-        idle3 python3-idle python3-pygame python3-pil
-        # Media tools
-        vlc vlc-bin vlc-plugin-base vlc-plugin-video-output
-        gimp gimp-data audacity
-        # Pi-specific extras
-        rpi-imager
-        # Additional office/productivity
-        xpdf evince
-        # Unused desktop shell extras
-        lxtask lxrandr lxappearance
-        # Print system (no printer on a wall panel)
-        cups cups-browsed cups-client
-        # Bluetooth tools (UI)
-        blueman
-        # Additional unused services
-        avahi-daemon triggerhappy
-    )
-
-    ALL_REMOVE=("${BLOAT_PKGS[@]}" "${FACTORY_EXTRA_PKGS[@]}")
-    FOUND_PKGS=()
-    for pkg in "${ALL_REMOVE[@]}"; do
-        dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && FOUND_PKGS+=("$pkg")
-    done
-
-    if [[ ${#FOUND_PKGS[@]} -gt 0 ]]; then
-        log "  Purging ${#FOUND_PKGS[@]} packages..."
-        apt-get remove -y -qq --purge "${FOUND_PKGS[@]}" 2>/dev/null || true
-    fi
-
-    # Also remove any previously-installed kiosk packages
-    PREV_PKGS=$(grep "^INSTALLED_PKGS=" /etc/kiosk-installed 2>/dev/null | cut -d= -f2- || echo "")
-    if [[ -n "$PREV_PKGS" ]]; then
-        REMOVE_LIST=()
-        for pkg in $PREV_PKGS; do
-            dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && REMOVE_LIST+=("$pkg")
-        done
-        [[ ${#REMOVE_LIST[@]} -gt 0 ]] &&             apt-get remove -y -qq --purge "${REMOVE_LIST[@]}" 2>/dev/null || true
-    fi
-
-    apt-get autoremove -y -qq --purge 2>/dev/null || true
-    apt-get autoclean -qq 2>/dev/null || true
-    log "  Package purge complete"
-
-    # ── Step 5: Clean up system state ──────────────────────────────────────────
-    log "Step 5/5: Cleaning system state..."
-    # Clear systemd failed units
-    systemctl reset-failed 2>/dev/null || true
-    # Clear thumbnail/cache dirs
-    rm -rf /root/.cache /root/.thumbnails 2>/dev/null || true
-    # Clear apt lists to free space
-    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-    log "  System state cleaned"
-
-    echo ""
-    log "Factory reset complete."
-    info "SSH access is intact. Network config is unchanged."
-    info "/var/log/kiosk.log preserved."
-    echo ""
-}
-
-if [[ "$1" == "--factory-reset" ]]; then
-    FACTORY_URL="${2:-}"
-    _factory_reset "$KIOSK_USER"
-
-    if [[ -n "$FACTORY_URL" ]]; then
-        info "URL provided — running fresh kiosk install: $FACTORY_URL"
-        KIOSK_URL="$FACTORY_URL"
-        echo ""
-        # Fall through to full install
-    else
-        warn "Factory reset done. Run a fresh install when ready:"
-        echo "    sudo bash $0 https://your-dashboard.com"
-        echo ""
-        exit 0
-    fi
-fi
-
 # =============================================================================
 #  --reset — wipe all kiosk config and start fresh
 # =============================================================================
@@ -955,6 +809,153 @@ _reset_kiosk() {
     info "/var/log/kiosk.log has been preserved."
     echo ""
 }
+
+_factory_reset() {
+    local TARGET_USER="$1"
+    local TARGET_HOME="/home/$TARGET_USER"
+
+    hr
+    echo -e "${RED}${BOLD}"
+    echo "  ███████████████████████████████████████████████"
+    echo "   FACTORY RESET — THIS CANNOT BE UNDONE"
+    echo "  ███████████████████████████████████████████████"
+    echo -e "${NC}"
+    echo "  This will permanently:"
+    echo "    • Wipe ALL contents of $TARGET_HOME (except .ssh)"
+    echo "    • Remove all kiosk configuration files"
+    echo "    • Remove the display API if installed"
+    echo "    • Purge kiosk-installed packages and orphaned dependencies"
+    echo "    • Purge ALL known desktop/bloat packages aggressively"
+    echo "    • Reset LightDM, cron, watchdog, logrotate entries"
+    echo ""
+    echo "  This will NOT touch:"
+    echo "    • SSH daemon, host keys, or authorised_keys"
+    echo "    • Network configuration (Wi-Fi, Ethernet)"
+    echo "    • Boot config (/boot/firmware/config.txt)"
+    echo "    • sudo / PAM configuration"
+    echo "    • /var/log/kiosk.log (preserved for diagnostics)"
+    echo ""
+    warn "The Pi will still be accessible via SSH after this completes."
+    echo ""
+    echo -e "${RED}  To confirm, type exactly:  FACTORY RESET${NC}"
+    read -r -p "  Confirmation: " CONFIRM
+    if [[ "$CONFIRM" != "FACTORY RESET" ]]; then
+        echo "Confirmation did not match. Aborting."
+        exit 0
+    fi
+    echo ""
+
+    # ── Step 1: Run the standard kiosk reset (removes all config files) ─────────
+    log "Step 1/5: Removing kiosk configuration..."
+    _reset_kiosk "$TARGET_USER" --skip-confirm --skip-packages
+
+    # ── Step 2: Remove display API files ─────────────────────────────────────
+    log "Step 2/5: Removing display API..."
+    for f in         /usr/local/bin/kiosk-display-api.py         /etc/kiosk-display.conf         /etc/systemd/system/kiosk-display-api.service         /etc/logrotate.d/kiosk-display; do
+        [[ -f "$f" ]] && rm -f "$f" && log "  Removed: $f"
+    done
+    systemctl disable kiosk-display-api.service 2>/dev/null || true
+    systemctl stop    kiosk-display-api.service 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+
+    # ── Step 3: Wipe user home directory (preserve .ssh) ───────────────────────
+    log "Step 3/5: Wiping home directory (preserving .ssh)..."
+    if [[ -d "$TARGET_HOME" ]]; then
+        # Move .ssh to a temp location
+        SSH_TMP=$(mktemp -d)
+        [[ -d "$TARGET_HOME/.ssh" ]] && cp -a "$TARGET_HOME/.ssh" "$SSH_TMP/"
+
+        # Wipe everything
+        find "$TARGET_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+
+        # Restore .ssh
+        [[ -d "$SSH_TMP/.ssh" ]] && cp -a "$SSH_TMP/.ssh" "$TARGET_HOME/" &&             chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.ssh"
+        rm -rf "$SSH_TMP"
+        log "  Home directory wiped, .ssh preserved"
+    fi
+
+    # ── Step 4: Aggressive package purge ──────────────────────────────────────
+    log "Step 4/5: Purging packages..."
+    # Everything in BLOAT_PKGS plus additional desktop packages
+    FACTORY_EXTRA_PKGS=(
+        # Additional IDEs and dev tools not needed on kiosk
+        idle3 python3-idle python3-pygame python3-pil
+        # Media tools
+        vlc vlc-bin vlc-plugin-base vlc-plugin-video-output
+        gimp gimp-data audacity
+        # Pi-specific extras
+        rpi-imager
+        # Additional office/productivity
+        xpdf evince
+        # Unused desktop shell extras
+        lxtask lxrandr lxappearance
+        # Print system (no printer on a wall panel)
+        cups cups-browsed cups-client
+        # Bluetooth tools (UI)
+        blueman
+        # Additional unused services
+        avahi-daemon triggerhappy
+    )
+
+    ALL_REMOVE=("${BLOAT_PKGS[@]}" "${FACTORY_EXTRA_PKGS[@]}")
+    FOUND_PKGS=()
+    for pkg in "${ALL_REMOVE[@]}"; do
+        dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && FOUND_PKGS+=("$pkg")
+    done
+
+    if [[ ${#FOUND_PKGS[@]} -gt 0 ]]; then
+        log "  Purging ${#FOUND_PKGS[@]} packages..."
+        apt-get remove -y -qq --purge "${FOUND_PKGS[@]}" 2>/dev/null || true
+    fi
+
+    # Also remove any previously-installed kiosk packages
+    PREV_PKGS=$(grep "^INSTALLED_PKGS=" /etc/kiosk-installed 2>/dev/null | cut -d= -f2- || echo "")
+    if [[ -n "$PREV_PKGS" ]]; then
+        REMOVE_LIST=()
+        for pkg in $PREV_PKGS; do
+            dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" && REMOVE_LIST+=("$pkg")
+        done
+        [[ ${#REMOVE_LIST[@]} -gt 0 ]] &&             apt-get remove -y -qq --purge "${REMOVE_LIST[@]}" 2>/dev/null || true
+    fi
+
+    apt-get autoremove -y -qq --purge 2>/dev/null || true
+    apt-get autoclean -qq 2>/dev/null || true
+    log "  Package purge complete"
+
+    # ── Step 5: Clean up system state ──────────────────────────────────────────
+    log "Step 5/5: Cleaning system state..."
+    # Clear systemd failed units
+    systemctl reset-failed 2>/dev/null || true
+    # Clear thumbnail/cache dirs
+    rm -rf /root/.cache /root/.thumbnails 2>/dev/null || true
+    # Clear apt lists to free space
+    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+    log "  System state cleaned"
+
+    echo ""
+    log "Factory reset complete."
+    info "SSH access is intact. Network config is unchanged."
+    info "/var/log/kiosk.log preserved."
+    echo ""
+}
+
+if [[ "$1" == "--factory-reset" ]]; then
+    FACTORY_URL="${2:-}"
+    _factory_reset "$KIOSK_USER"
+
+    if [[ -n "$FACTORY_URL" ]]; then
+        info "URL provided — running fresh kiosk install: $FACTORY_URL"
+        KIOSK_URL="$FACTORY_URL"
+        echo ""
+        # Fall through to full install
+    else
+        warn "Factory reset done. Run a fresh install when ready:"
+        echo "    sudo bash $0 https://your-dashboard.com"
+        echo ""
+        exit 0
+    fi
+fi
+
 
 if [[ "$1" == "--reset" ]]; then
     # Allow URL to be passed alongside --reset for immediate reinstall
