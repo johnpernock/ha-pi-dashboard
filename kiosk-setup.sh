@@ -476,7 +476,7 @@ if [[ "$1" == "--enable-rtc" ]]; then
 
     log "RTC detected: $RTC_STATUS"
     _write_shutdown_script
-    CRON_JOB="$SHUTDOWN_MINUTE $SHUTDOWN_HOUR * * * /usr/local/bin/kiosk-shutdown.sh >> /var/log/kiosk.log 2>&1"
+    CRON_JOB="$SHUTDOWN_MINUTE $SHUTDOWN_HOUR * * * /usr/local/bin/kiosk-shutdown.sh >> $KIOSK_HOME/kiosk.log 2>&1"
     ( crontab -l 2>/dev/null | grep -v "kiosk-shutdown"; echo "$CRON_JOB" ) | crontab -
     log "Cron job installed: shutdown daily at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}"
     sed -i "s/^RTC_ENABLED=.*/RTC_ENABLED=true/" "$INSTALL_MARKER"
@@ -666,7 +666,7 @@ _reset_kiosk() {
     if [[ "$SKIP_CONFIRM" != "--skip-confirm" ]]; then
         hr; banner "  Kiosk Reset — Removing All Configuration"; hr; echo ""
         warn "This will remove ALL kiosk configuration for user: $TARGET_USER"
-        warn "Log file (/var/log/kiosk.log) will be preserved."
+        warn "Log file ($KIOSK_HOME/kiosk.log) will be preserved."
         echo ""
         read -r -p "$(echo -e "${RED}[!]${NC} Are you sure you want to wipe the kiosk config? [y/N] ")" REPLY
         [[ "${REPLY,,}" =~ ^y ]] || { echo "Reset cancelled."; exit 0; }
@@ -811,7 +811,7 @@ _reset_kiosk() {
 
     echo ""
     log "Reset complete. All kiosk configuration has been removed."
-    info "/var/log/kiosk.log has been preserved."
+    info "$KIOSK_HOME/kiosk.log has been preserved."
     echo ""
 }
 
@@ -838,7 +838,7 @@ _factory_reset() {
     echo "    • Network configuration (Wi-Fi, Ethernet)"
     echo "    • Boot config (/boot/firmware/config.txt)"
     echo "    • sudo / PAM configuration"
-    echo "    • /var/log/kiosk.log (preserved for diagnostics)"
+    echo "    • $KIOSK_HOME/kiosk.log (preserved for diagnostics)"
     echo ""
     warn "The Pi will still be accessible via SSH after this completes."
     echo ""
@@ -940,7 +940,7 @@ _factory_reset() {
     echo ""
     log "Factory reset complete."
     info "SSH access is intact. Network config is unchanged."
-    info "/var/log/kiosk.log preserved."
+    info "$KIOSK_HOME/kiosk.log preserved."
     echo ""
 }
 
@@ -1248,6 +1248,7 @@ EOF
 # ── Kiosk autostart (${OS_CODENAME} / Wayland + labwc) ───────────────────────
 # Update URL:  sudo bash kiosk-setup.sh --update-url https://new-url.com
 
+  KIOSK_LOG=$KIOSK_HOME/kiosk.log
   KIOSK_URL_VALUE=$KIOSK_URL
 
 # Black background — first thing rendered, prevents any desktop flash
@@ -1268,7 +1269,7 @@ MAX_WAIT=30; WAITED=0
 while ! curl -s --max-time 2 "\$KIOSK_URL_VALUE" > /dev/null 2>&1; do
     sleep 2; WAITED=\$((WAITED + 2))
     [ \$WAITED -ge \$MAX_WAIT ] \
-        && echo "[\$(date)] Network wait timeout — launching anyway" >> /var/log/kiosk.log \
+        && echo "[\$(date)] Network wait timeout — launching anyway" >> $KIOSK_HOME/kiosk.log \
         && break
 done
 
@@ -1278,39 +1279,46 @@ echo "(while true; do sleep $AUTO_RELOAD_SECONDS; wtype -k F5 2>/dev/null; done)
 fi)
 
 # Chromium crash watchdog — relaunches on any unexpected exit
+# Flags are pre-resolved into a bash array so no blank conditional lines
+# can ever break the multi-line command continuation.
+CHROMIUM_FLAGS=(
+  --ozone-platform=wayland
+  --enable-features=UseOzonePlatform,WebContentsForceDark
+  --force-dark-mode
+$(if $ENABLE_OSK; then echo "  --enable-virtual-keyboard"; fi)
+$(if $ENABLE_BROWSER_MOD; then
+    echo "  --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk"
+  else
+    echo "  --incognito"
+fi)
+$(echo "$CHROMIUM_MEMORY_FLAGS" | tr ' ' '\n' | grep -v '^$' | sed 's/^/  /')
+  --kiosk
+  --noerrdialogs
+  --disable-infobars
+  --disable-notifications
+  --disable-popup-blocking
+  --no-first-run
+  --disable-default-apps
+  --disable-extensions
+  --disable-translate
+  --disable-features=TranslateUI,PasswordManagerOnboardingAndroid
+  --disable-session-crashed-bubble
+$(if ! $ENABLE_BROWSER_MOD; then echo "  --disable-restore-session-state"; fi)
+  --disable-save-password-bubble
+  --disable-sync
+  --disable-background-networking
+  --check-for-update-interval=31536000
+  --disable-pinch
+  --touch-events=enabled
+  --disable-features=TouchpadOverscrollHistoryNavigation
+  --overscroll-history-navigation=0
+  --hide-scrollbars
+  --autoplay-policy=no-user-gesture-required
+)
 while true; do
-    echo "[\$(date)] Launching Chromium → \$KIOSK_URL_VALUE" >> /var/log/kiosk.log
-    chromium \\
-      --ozone-platform=wayland \\
-      --enable-features=UseOzonePlatform,WebContentsForceDark \\
-      --force-dark-mode \\
-      $(if $ENABLE_OSK; then echo "--enable-virtual-keyboard \\"; fi)
-      $(if $ENABLE_BROWSER_MOD; then echo "--user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo "--incognito \\"; fi)
-      $(echo "$CHROMIUM_MEMORY_FLAGS" | sed 's/^ *//' | tr '\n' ' ')
-      --kiosk \\
-      --noerrdialogs \\
-      --disable-infobars \\
-      --disable-notifications \\
-      --disable-popup-blocking \\
-      --no-first-run \\
-      --disable-default-apps \\
-      --disable-extensions \\
-      --disable-translate \\
-      --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \\
-      --disable-session-crashed-bubble \\
-      $(if ! $ENABLE_BROWSER_MOD; then echo "--disable-restore-session-state \\"; fi)
-      --disable-save-password-bubble \\
-      --disable-sync \\
-      --disable-background-networking \\
-      --check-for-update-interval=31536000 \\
-      --disable-pinch \\
-      --touch-events=enabled \\
-      --disable-features=TouchpadOverscrollHistoryNavigation \\
-      --overscroll-history-navigation=0 \\
-      --hide-scrollbars \\
-      --autoplay-policy=no-user-gesture-required \\
-      "\$KIOSK_URL_VALUE"
-    echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> /var/log/kiosk.log
+    echo "[\$(date)] Launching Chromium \$KIOSK_URL_VALUE" >> \$KIOSK_LOG
+    chromium "\${CHROMIUM_FLAGS[@]}" "\$KIOSK_URL_VALUE"
+    echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> \$KIOSK_LOG
     sleep 5
 done &
 AUTOSTART
@@ -1379,40 +1387,46 @@ $OSK_LINE
   while ! curl -s --max-time 2 "\$KIOSK_URL" > /dev/null 2>&1; do
     sleep 2; WAITED=\$((WAITED + 2))
     [ \$WAITED -ge \$MAX_WAIT ] \
-      && echo "[\$(date)] Network timeout — launching anyway" >> /var/log/kiosk.log \
+      && echo "[\$(date)] Network timeout" >> $KIOSK_HOME/kiosk.log \
       && break
   done
+  # Build flag array — avoids blank lines from empty conditionals breaking command continuation
+  CHROMIUM_FLAGS=(
+    --enable-features=WebContentsForceDark
+    --force-dark-mode
+$(if $ENABLE_OSK; then echo "    --enable-virtual-keyboard"; fi)
+$(if $ENABLE_BROWSER_MOD; then
+    echo "    --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk"
+  else
+    echo "    --incognito"
+fi)
+$(echo "$CHROMIUM_MEMORY_FLAGS" | tr " " "\n" | grep -v "^$" | sed "s/^/    /")
+    --kiosk
+    --noerrdialogs
+    --disable-infobars
+    --disable-notifications
+    --disable-popup-blocking
+    --no-first-run
+    --disable-default-apps
+    --disable-extensions
+    --disable-translate
+    --disable-features=TranslateUI,PasswordManagerOnboardingAndroid
+    --disable-session-crashed-bubble
+$(if ! $ENABLE_BROWSER_MOD; then echo "    --disable-restore-session-state"; fi)
+    --disable-save-password-bubble
+    --disable-sync
+    --disable-background-networking
+    --check-for-update-interval=31536000
+    --disable-pinch
+    --touch-events=enabled
+    --overscroll-history-navigation=0
+    --hide-scrollbars
+    --autoplay-policy=no-user-gesture-required
+  )
   while true; do
-    echo "[\$(date)] Launching Chromium → \$KIOSK_URL" >> /var/log/kiosk.log
-    ${CHROMIUM_PKG} \
-      --enable-features=WebContentsForceDark \
-      --force-dark-mode \
-      $(if $ENABLE_OSK; then echo '      --enable-virtual-keyboard \'; fi)
-      $(if $ENABLE_BROWSER_MOD; then echo "      --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo '      --incognito \'; fi)
-      $(echo "$CHROMIUM_MEMORY_FLAGS" | sed 's/^ *//' | tr '\n' ' ')
-      --kiosk \
-      --noerrdialogs \
-      --disable-infobars \
-      --disable-notifications \
-      --disable-popup-blocking \
-      --no-first-run \
-      --disable-default-apps \
-      --disable-extensions \
-      --disable-translate \
-      --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
-      --disable-session-crashed-bubble \
-      $(if ! $ENABLE_BROWSER_MOD; then echo '      --disable-restore-session-state \'; fi)
-      --disable-save-password-bubble \
-      --disable-sync \
-      --disable-background-networking \
-      --check-for-update-interval=31536000 \
-      --disable-pinch \
-      --touch-events=enabled \
-      --overscroll-history-navigation=0 \
-      --hide-scrollbars \
-      --autoplay-policy=no-user-gesture-required \
-      "\$KIOSK_URL"
-    echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> /var/log/kiosk.log
+    echo "[\$(date)] Launching Chromium \$KIOSK_URL" >> $KIOSK_HOME/kiosk.log
+    ${CHROMIUM_PKG} "\${CHROMIUM_FLAGS[@]}" "\$KIOSK_URL"
+    echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> $KIOSK_HOME/kiosk.log
     sleep 5
   done
 '
@@ -1450,7 +1464,7 @@ WAKE_MINUTE=${WAKE_MINUTE}
 RTC_DEVICE=/sys/class/rtc/rtc0/wakealarm
 
 echo "[\$(date)] Shutdown initiated — RTC wake set for \${WAKE_HOUR}:\$(printf '%02d' \$WAKE_MINUTE)..." \
-    | tee -a /var/log/kiosk.log
+    | tee -a $KIOSK_HOME/kiosk.log
 
 WAKE_TIME_STR="\${WAKE_HOUR}:\$(printf '%02d' \$WAKE_MINUTE):00"
 NOW=\$(date +%s)
@@ -1459,23 +1473,23 @@ TOMORROW_WAKE=\$(date -d "tomorrow \${WAKE_TIME_STR}" +%s)
 WAKE_EPOCH=\$( [ "\$NOW" -ge "\$TODAY_WAKE" ] && echo "\$TOMORROW_WAKE" || echo "\$TODAY_WAKE" )
 
 echo "[\$(date)] RTC alarm → \$(date -d "@\$WAKE_EPOCH" '+%A %Y-%m-%d %H:%M:%S')" \
-    | tee -a /var/log/kiosk.log
+    | tee -a $KIOSK_HOME/kiosk.log
 
 if [[ -w "\$RTC_DEVICE" ]]; then
     echo 0 > "\$RTC_DEVICE"
     echo "\$WAKE_EPOCH" > "\$RTC_DEVICE"
-    echo "[\$(date)] Alarm written via sysfs" | tee -a /var/log/kiosk.log
+    echo "[\$(date)] Alarm written via sysfs" | tee -a $KIOSK_HOME/kiosk.log
 elif command -v rtcwake &>/dev/null; then
     rtcwake -m no -t "\$WAKE_EPOCH"
-    echo "[\$(date)] Alarm set via rtcwake" | tee -a /var/log/kiosk.log
+    echo "[\$(date)] Alarm set via rtcwake" | tee -a $KIOSK_HOME/kiosk.log
 else
     echo "[\$(date)] ERROR: wakealarm not writable and rtcwake not found." \
-        | tee -a /var/log/kiosk.log
+        | tee -a $KIOSK_HOME/kiosk.log
     exit 1
 fi
 
 sync
-echo "[\$(date)] Shutting down. Good night!" | tee -a /var/log/kiosk.log
+echo "[\$(date)] Shutting down. Good night!" | tee -a $KIOSK_HOME/kiosk.log
 /sbin/shutdown -h now
 SCRIPT
     chmod +x /usr/local/bin/kiosk-shutdown.sh
@@ -1485,7 +1499,7 @@ SCRIPT
 # ── 10. Conditionally install shutdown + cron ─────────────────────────────────
 if $RTC_PRESENT; then
     _write_shutdown_script
-    CRON_JOB="$SHUTDOWN_MINUTE $SHUTDOWN_HOUR * * * /usr/local/bin/kiosk-shutdown.sh >> /var/log/kiosk.log 2>&1"
+    CRON_JOB="$SHUTDOWN_MINUTE $SHUTDOWN_HOUR * * * /usr/local/bin/kiosk-shutdown.sh >> $KIOSK_HOME/kiosk.log 2>&1"
     ( crontab -l 2>/dev/null | grep -v "kiosk-shutdown"; echo "$CRON_JOB" ) | crontab -
     log "Cron: shutdown daily at ${SHUTDOWN_HOUR}:${SHUTDOWN_MINUTE_PAD}"
     RTC_ENABLED=true
@@ -1496,7 +1510,7 @@ fi
 
 # ── 11. Log rotation ──────────────────────────────────────────────────────────
 cat > /etc/logrotate.d/kiosk << 'EOF'
-/var/log/kiosk.log {
+$KIOSK_HOME/kiosk.log {
     weekly
     rotate 4
     compress
@@ -1531,6 +1545,9 @@ WAVESHARE_10DP=$WAVESHARE_10DP
 INSTALLED_PKGS=${INSTALLED_PKGS[*]}
 EOF
 log "Install marker → $INSTALL_MARKER"
+    touch "$KIOSK_HOME/kiosk.log"
+    chown "$KIOSK_USER:$KIOSK_USER" "$KIOSK_HOME/kiosk.log"
+    log "Kiosk log file created at $KIOSK_HOME/kiosk.log"
 
 # ── 13. Home Assistant auto-login ─────────────────────────────────────────────
 HA_WRAPPER_PATH="$KIOSK_HOME/kiosk-ha-login.html"
@@ -1973,7 +1990,7 @@ if $ENABLE_BROWSER_MOD; then
 fi
 echo -e "  ${CYAN}Waveshare 10DP :${NC} $(${WAVESHARE_10DP} && echo "Configured (1280x800 DDC/CI)" || echo "Not configured")"
 echo -e "  ${CYAN}Watchdog       :${NC} $($HAS_HW_WATCHDOG && echo "Hardware (15s)" || echo "None — software-only")"
-echo -e "  ${CYAN}Logs           :${NC} /var/log/kiosk.log"
+echo -e "  ${CYAN}Logs           :${NC} $KIOSK_HOME/kiosk.log"
 echo ""
 
 if $RTC_ENABLED; then
