@@ -1260,6 +1260,40 @@ EOF
     $ENABLE_OSK && OSK_LINE="wvkbd-mobintl --hidden --fn 'Noto Sans 16' &" \
                 || OSK_LINE="# OSK disabled — set ENABLE_OSK=true in kiosk-setup.sh to enable"
 
+    # Build the Chromium command once, before the heredoc.
+    # This is the only reliable way to handle conditional flags — resolve them
+    # here in the script where bash is guaranteed, then write one clean line.
+    _CHROME_FLAGS="--ozone-platform=wayland"
+    _CHROME_FLAGS+=" --enable-features=UseOzonePlatform,WebContentsForceDark"
+    _CHROME_FLAGS+=" --force-dark-mode"
+    $ENABLE_OSK         && _CHROME_FLAGS+=" --enable-virtual-keyboard"
+    $ENABLE_BROWSER_MOD && _CHROME_FLAGS+=" --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk" \
+                        || _CHROME_FLAGS+=" --incognito"
+    [[ -n "$CHROMIUM_MEMORY_FLAGS" ]] && _CHROME_FLAGS+=" $CHROMIUM_MEMORY_FLAGS"
+    _CHROME_FLAGS+=" --kiosk"
+    _CHROME_FLAGS+=" --noerrdialogs"
+    _CHROME_FLAGS+=" --disable-infobars"
+    _CHROME_FLAGS+=" --disable-notifications"
+    _CHROME_FLAGS+=" --disable-popup-blocking"
+    _CHROME_FLAGS+=" --no-first-run"
+    _CHROME_FLAGS+=" --disable-default-apps"
+    _CHROME_FLAGS+=" --disable-extensions"
+    _CHROME_FLAGS+=" --disable-translate"
+    _CHROME_FLAGS+=" --disable-features=TranslateUI,PasswordManagerOnboardingAndroid"
+    _CHROME_FLAGS+=" --disable-session-crashed-bubble"
+    ! $ENABLE_BROWSER_MOD && _CHROME_FLAGS+=" --disable-restore-session-state"
+    _CHROME_FLAGS+=" --disable-save-password-bubble"
+    _CHROME_FLAGS+=" --disable-sync"
+    _CHROME_FLAGS+=" --disable-background-networking"
+    _CHROME_FLAGS+=" --check-for-update-interval=31536000"
+    _CHROME_FLAGS+=" --disable-pinch"
+    _CHROME_FLAGS+=" --touch-events=enabled"
+    _CHROME_FLAGS+=" --disable-features=TouchpadOverscrollHistoryNavigation"
+    _CHROME_FLAGS+=" --overscroll-history-navigation=0"
+    _CHROME_FLAGS+=" --hide-scrollbars"
+    _CHROME_FLAGS+=" --autoplay-policy=no-user-gesture-required"
+    CHROMIUM_CMD="chromium $_CHROME_FLAGS"
+
     # labwc autostart
     cat > "$AUTOSTART_FILE" << AUTOSTART
 #!/bin/bash
@@ -1287,7 +1321,7 @@ MAX_WAIT=30; WAITED=0
 while ! curl -s --max-time 2 "\$KIOSK_URL_VALUE" > /dev/null 2>&1; do
     sleep 2; WAITED=\$((WAITED + 2))
     [ \$WAITED -ge \$MAX_WAIT ] \
-        && echo "[\$(date)] Network wait timeout — launching anyway" >> $KIOSK_HOME/kiosk.log \
+        && echo "[\$(date)] Network wait timeout — launching anyway" >> \$KIOSK_LOG \
         && break
 done
 
@@ -1297,40 +1331,9 @@ echo "(while true; do sleep $AUTO_RELOAD_SECONDS; wtype -k F5 2>/dev/null; done)
 fi)
 
 # Chromium crash watchdog — relaunches on any unexpected exit
-# Flags written as a plain string resolved at install time — no arrays,
-# no backslash continuations, compatible with sh and bash alike.
-CHROMIUM_CMD="chromium \
-  --ozone-platform=wayland \
-  --enable-features=UseOzonePlatform,WebContentsForceDark \
-  --force-dark-mode \
-$(if $ENABLE_OSK;         then echo '  --enable-virtual-keyboard \\'; fi)
-$(if $ENABLE_BROWSER_MOD; then echo "  --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo '  --incognito \\'; fi)
-$(echo "$CHROMIUM_MEMORY_FLAGS" | tr ' ' '\n' | grep -v '^$' | sed 's/.*/ & \\/' | tr -d '\n')
-  --kiosk \
-  --noerrdialogs \
-  --disable-infobars \
-  --disable-notifications \
-  --disable-popup-blocking \
-  --no-first-run \
-  --disable-default-apps \
-  --disable-extensions \
-  --disable-translate \
-  --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
-  --disable-session-crashed-bubble \
-$(if ! $ENABLE_BROWSER_MOD; then echo '  --disable-restore-session-state \\'; fi)
-  --disable-save-password-bubble \
-  --disable-sync \
-  --disable-background-networking \
-  --check-for-update-interval=31536000 \
-  --disable-pinch \
-  --touch-events=enabled \
-  --disable-features=TouchpadOverscrollHistoryNavigation \
-  --overscroll-history-navigation=0 \
-  --hide-scrollbars \
-  --autoplay-policy=no-user-gesture-required"
 while true; do
     echo "[\$(date)] Launching Chromium \$KIOSK_URL_VALUE" >> \$KIOSK_LOG
-    eval \$CHROMIUM_CMD "\$KIOSK_URL_VALUE"
+    $CHROMIUM_CMD "\$KIOSK_URL_VALUE"
     echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> \$KIOSK_LOG
     sleep 5
 done &
@@ -1373,6 +1376,23 @@ EOF
                 || OSK_LINE="# OSK disabled — set ENABLE_OSK=true in kiosk-setup.sh to enable"
 
     # LXDE autostart
+    # Build X11 Chromium flag string before heredoc (same pattern as Wayland)
+    _X11_FLAGS="--enable-features=WebContentsForceDark --force-dark-mode"
+    $ENABLE_OSK         && _X11_FLAGS+=" --enable-virtual-keyboard"
+    $ENABLE_BROWSER_MOD && _X11_FLAGS+=" --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk" \
+                        || _X11_FLAGS+=" --incognito"
+    [[ -n "$CHROMIUM_MEMORY_FLAGS" ]] && _X11_FLAGS+=" $CHROMIUM_MEMORY_FLAGS"
+    _X11_FLAGS+=" --kiosk --noerrdialogs --disable-infobars --disable-notifications"
+    _X11_FLAGS+=" --disable-popup-blocking --no-first-run --disable-default-apps"
+    _X11_FLAGS+=" --disable-extensions --disable-translate"
+    _X11_FLAGS+=" --disable-features=TranslateUI,PasswordManagerOnboardingAndroid"
+    _X11_FLAGS+=" --disable-session-crashed-bubble"
+    ! $ENABLE_BROWSER_MOD && _X11_FLAGS+=" --disable-restore-session-state"
+    _X11_FLAGS+=" --disable-save-password-bubble --disable-sync --disable-background-networking"
+    _X11_FLAGS+=" --check-for-update-interval=31536000 --disable-pinch --touch-events=enabled"
+    _X11_FLAGS+=" --overscroll-history-navigation=0 --hide-scrollbars --autoplay-policy=no-user-gesture-required"
+    X11_CHROMIUM_FLAGS="$_X11_FLAGS"
+
     cat > "$AUTOSTART_FILE" << AUTOSTART
 # ── Kiosk autostart (${OS_CODENAME} / X11 + LXDE) ────────────────────────────
 # Update URL:  sudo bash kiosk-setup.sh --update-url https://new-url.com
@@ -1396,6 +1416,8 @@ $OSK_LINE
 # Network wait + Chromium crash watchdog
 @bash -c '
   KIOSK_URL=\$(grep "KIOSK_URL_VALUE=" "${AUTOSTART_FILE}" | head -1 | sed "s/.*KIOSK_URL_VALUE=//")
+  # Build flag string (pre-resolved at install time — no conditionals here)
+  X11_CHROMIUM_FLAGS="$X11_CHROMIUM_FLAGS"
   MAX_WAIT=30; WAITED=0
   while ! curl -s --max-time 2 "\$KIOSK_URL" > /dev/null 2>&1; do
     sleep 2; WAITED=\$((WAITED + 2))
@@ -1403,36 +1425,9 @@ $OSK_LINE
       && echo "[\$(date)] Network timeout" >> $KIOSK_HOME/kiosk.log \
       && break
   done
-  CHROMIUM_CMD="${CHROMIUM_PKG} \
-    --enable-features=WebContentsForceDark \
-    --force-dark-mode \
-$(if $ENABLE_OSK;         then echo '    --enable-virtual-keyboard \\'; fi)
-$(if $ENABLE_BROWSER_MOD; then echo "    --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo '    --incognito \\'; fi)
-$(echo "$CHROMIUM_MEMORY_FLAGS" | tr ' ' '\n' | grep -v '^$' | sed 's/.*/ & \\/' | tr -d '\n')
-    --kiosk \
-    --noerrdialogs \
-    --disable-infobars \
-    --disable-notifications \
-    --disable-popup-blocking \
-    --no-first-run \
-    --disable-default-apps \
-    --disable-extensions \
-    --disable-translate \
-    --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
-    --disable-session-crashed-bubble \
-$(if ! $ENABLE_BROWSER_MOD; then echo '    --disable-restore-session-state \\'; fi)
-    --disable-save-password-bubble \
-    --disable-sync \
-    --disable-background-networking \
-    --check-for-update-interval=31536000 \
-    --disable-pinch \
-    --touch-events=enabled \
-    --overscroll-history-navigation=0 \
-    --hide-scrollbars \
-    --autoplay-policy=no-user-gesture-required"
   while true; do
     echo "[\$(date)] Launching Chromium \$KIOSK_URL" >> $KIOSK_HOME/kiosk.log
-    eval \$CHROMIUM_CMD "\$KIOSK_URL"
+    ${CHROMIUM_PKG} $X11_CHROMIUM_FLAGS "\$KIOSK_URL"
     echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> $KIOSK_HOME/kiosk.log
     sleep 5
   done
