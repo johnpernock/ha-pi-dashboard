@@ -1297,45 +1297,40 @@ echo "(while true; do sleep $AUTO_RELOAD_SECONDS; wtype -k F5 2>/dev/null; done)
 fi)
 
 # Chromium crash watchdog — relaunches on any unexpected exit
-# Flags are pre-resolved into a bash array so no blank conditional lines
-# can ever break the multi-line command continuation.
-CHROMIUM_FLAGS=(
-  --ozone-platform=wayland
-  --enable-features=UseOzonePlatform,WebContentsForceDark
-  --force-dark-mode
-$(if $ENABLE_OSK; then echo "  --enable-virtual-keyboard"; fi)
-$(if $ENABLE_BROWSER_MOD; then
-    echo "  --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk"
-  else
-    echo "  --incognito"
-fi)
-$(echo "$CHROMIUM_MEMORY_FLAGS" | tr ' ' '\n' | grep -v '^$' | sed 's/^/  /')
-  --kiosk
-  --noerrdialogs
-  --disable-infobars
-  --disable-notifications
-  --disable-popup-blocking
-  --no-first-run
-  --disable-default-apps
-  --disable-extensions
-  --disable-translate
-  --disable-features=TranslateUI,PasswordManagerOnboardingAndroid
-  --disable-session-crashed-bubble
-$(if ! $ENABLE_BROWSER_MOD; then echo "  --disable-restore-session-state"; fi)
-  --disable-save-password-bubble
-  --disable-sync
-  --disable-background-networking
-  --check-for-update-interval=31536000
-  --disable-pinch
-  --touch-events=enabled
-  --disable-features=TouchpadOverscrollHistoryNavigation
-  --overscroll-history-navigation=0
-  --hide-scrollbars
-  --autoplay-policy=no-user-gesture-required
-)
+# Flags written as a plain string resolved at install time — no arrays,
+# no backslash continuations, compatible with sh and bash alike.
+CHROMIUM_CMD="chromium \
+  --ozone-platform=wayland \
+  --enable-features=UseOzonePlatform,WebContentsForceDark \
+  --force-dark-mode \
+$(if $ENABLE_OSK;         then echo '  --enable-virtual-keyboard \\'; fi)
+$(if $ENABLE_BROWSER_MOD; then echo "  --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo '  --incognito \\'; fi)
+$(echo "$CHROMIUM_MEMORY_FLAGS" | tr ' ' '\n' | grep -v '^$' | sed 's/.*/ & \\/' | tr -d '\n')
+  --kiosk \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-notifications \
+  --disable-popup-blocking \
+  --no-first-run \
+  --disable-default-apps \
+  --disable-extensions \
+  --disable-translate \
+  --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
+  --disable-session-crashed-bubble \
+$(if ! $ENABLE_BROWSER_MOD; then echo '  --disable-restore-session-state \\'; fi)
+  --disable-save-password-bubble \
+  --disable-sync \
+  --disable-background-networking \
+  --check-for-update-interval=31536000 \
+  --disable-pinch \
+  --touch-events=enabled \
+  --disable-features=TouchpadOverscrollHistoryNavigation \
+  --overscroll-history-navigation=0 \
+  --hide-scrollbars \
+  --autoplay-policy=no-user-gesture-required"
 while true; do
     echo "[\$(date)] Launching Chromium \$KIOSK_URL_VALUE" >> \$KIOSK_LOG
-    chromium "\${CHROMIUM_FLAGS[@]}" "\$KIOSK_URL_VALUE"
+    eval \$CHROMIUM_CMD "\$KIOSK_URL_VALUE"
     echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> \$KIOSK_LOG
     sleep 5
 done &
@@ -1408,42 +1403,36 @@ $OSK_LINE
       && echo "[\$(date)] Network timeout" >> $KIOSK_HOME/kiosk.log \
       && break
   done
-  # Build flag array — avoids blank lines from empty conditionals breaking command continuation
-  CHROMIUM_FLAGS=(
-    --enable-features=WebContentsForceDark
-    --force-dark-mode
-$(if $ENABLE_OSK; then echo "    --enable-virtual-keyboard"; fi)
-$(if $ENABLE_BROWSER_MOD; then
-    echo "    --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk"
-  else
-    echo "    --incognito"
-fi)
-$(echo "$CHROMIUM_MEMORY_FLAGS" | tr " " "\n" | grep -v "^$" | sed "s/^/    /")
-    --kiosk
-    --noerrdialogs
-    --disable-infobars
-    --disable-notifications
-    --disable-popup-blocking
-    --no-first-run
-    --disable-default-apps
-    --disable-extensions
-    --disable-translate
-    --disable-features=TranslateUI,PasswordManagerOnboardingAndroid
-    --disable-session-crashed-bubble
-$(if ! $ENABLE_BROWSER_MOD; then echo "    --disable-restore-session-state"; fi)
-    --disable-save-password-bubble
-    --disable-sync
-    --disable-background-networking
-    --check-for-update-interval=31536000
-    --disable-pinch
-    --touch-events=enabled
-    --overscroll-history-navigation=0
-    --hide-scrollbars
-    --autoplay-policy=no-user-gesture-required
-  )
+  CHROMIUM_CMD="${CHROMIUM_PKG} \
+    --enable-features=WebContentsForceDark \
+    --force-dark-mode \
+$(if $ENABLE_OSK;         then echo '    --enable-virtual-keyboard \\'; fi)
+$(if $ENABLE_BROWSER_MOD; then echo "    --user-data-dir=$KIOSK_HOME/.config/chromium-kiosk \\"; else echo '    --incognito \\'; fi)
+$(echo "$CHROMIUM_MEMORY_FLAGS" | tr ' ' '\n' | grep -v '^$' | sed 's/.*/ & \\/' | tr -d '\n')
+    --kiosk \
+    --noerrdialogs \
+    --disable-infobars \
+    --disable-notifications \
+    --disable-popup-blocking \
+    --no-first-run \
+    --disable-default-apps \
+    --disable-extensions \
+    --disable-translate \
+    --disable-features=TranslateUI,PasswordManagerOnboardingAndroid \
+    --disable-session-crashed-bubble \
+$(if ! $ENABLE_BROWSER_MOD; then echo '    --disable-restore-session-state \\'; fi)
+    --disable-save-password-bubble \
+    --disable-sync \
+    --disable-background-networking \
+    --check-for-update-interval=31536000 \
+    --disable-pinch \
+    --touch-events=enabled \
+    --overscroll-history-navigation=0 \
+    --hide-scrollbars \
+    --autoplay-policy=no-user-gesture-required"
   while true; do
     echo "[\$(date)] Launching Chromium \$KIOSK_URL" >> $KIOSK_HOME/kiosk.log
-    ${CHROMIUM_PKG} "\${CHROMIUM_FLAGS[@]}" "\$KIOSK_URL"
+    eval \$CHROMIUM_CMD "\$KIOSK_URL"
     echo "[\$(date)] Chromium exited (\$?) — restarting in 5s..." >> $KIOSK_HOME/kiosk.log
     sleep 5
   done
