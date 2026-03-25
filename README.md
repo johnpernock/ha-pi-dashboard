@@ -356,9 +356,11 @@ Bookworm / Bullseye / Buster (X11):
 Both:
   ~/.config/gtk-3.0/settings.ini             GTK dark theme
   ~/.config/gtk-4.0/settings.ini             GTK4 dark theme
+  ~/kiosk-ha-login.html                      HA token wrapper page (only if HA_AUTO_LOGIN=true + token set)
   /etc/X11/xorg.conf.d/10-kiosk-blanking.conf    (X11 only)
   /usr/local/bin/kiosk-shutdown.sh           (only if RTC detected)
-  /etc/kiosk-installed                       Install state marker
+  /etc/kiosk-installed                       Install state marker (stores URL, OS, Pi model,
+                                             RTC/OSK/HA state, and installed package list)
   /var/log/kiosk.log                         Runtime log
   /etc/logrotate.d/kiosk                     Log rotation config
   /etc/NetworkManager/conf.d/99-kiosk-wifi-powersave.conf
@@ -586,6 +588,44 @@ sudo reboot
 ```
 
 If Chromium still fails, consider a lighter browser (`surf`, `midori`) or upgrade to a Pi Zero 2W or Pi 3.
+
+### Home Assistant login screen still appearing
+
+**Check 1 — Trusted Networks not configured:**
+Confirm you added the YAML block printed during install to `configuration.yaml` and restarted HA. The YAML is printed at the end of every install when `HA_AUTO_LOGIN=true`.
+
+**Check 2 — Wrong subnet in the YAML:**
+The script auto-detects the subnet from the Pi's default route. If your network changed since install, update the subnet in `configuration.yaml` manually and restart HA.
+
+**Check 3 — Token wrapper not loading:**
+Confirm `~/kiosk-ha-login.html` exists and is readable:
+```bash
+ls -la ~/kiosk-ha-login.html
+cat ~/kiosk-ha-login.html | grep TOKEN
+```
+
+**Check 4 — Token expired or revoked:**
+Rotate the token in HA (Profile → Long-Lived Access Tokens) then update the Pi:
+```bash
+sudo bash kiosk-setup.sh --set-token YOUR_NEW_TOKEN
+sudo pkill chromium
+```
+
+**Check 5 — HA URL mismatch:**
+If your HA IP changed, the token wrapper will redirect to the old address. Update it:
+```bash
+sudo bash kiosk-setup.sh --reset https://your-new-ha-url:8123
+```
+Then re-set `HA_AUTO_LOGIN=true`, `HA_URL`, and `HA_TOKEN` in the config block before reinstalling.
+
+### Bloat removal left something behind
+
+If a package was missed (e.g. a new Pi OS image added a new bloat package), remove it manually:
+```bash
+sudo apt-get remove --purge <package-name>
+sudo apt-get autoremove --purge
+```
+To add it to the script's removal list permanently, add its name to the `BLOAT_PKGS` array in `kiosk-setup.sh`.
 
 ---
 
