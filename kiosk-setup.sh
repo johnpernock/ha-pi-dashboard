@@ -36,6 +36,11 @@
 #
 #    Update the browser_mod Browser ID (no reinstall):
 #      sudo bash kiosk-setup.sh --set-browser-id kiosk-living-room
+#
+#  NOTE: Flags must be run one at a time. They cannot be combined on one line.
+#    Correct:   sudo bash kiosk-setup.sh --factory-reset https://your-url.com
+#               sudo bash kiosk-setup.sh --set-token YOUR_TOKEN
+#    Incorrect: sudo bash kiosk-setup.sh --factory-reset --set-token TOKEN https://url
 # =============================================================================
 
 set -e
@@ -941,6 +946,13 @@ _factory_reset() {
 
 if [[ "$1" == "--factory-reset" ]]; then
     FACTORY_URL="${2:-}"
+
+    # Guard: catch accidental "kiosk-setup.sh --factory-reset --some-flag url" usage
+    # where $2 is another flag rather than a URL
+    if [[ "$FACTORY_URL" == --* ]]; then
+        err "Unexpected argument after --factory-reset: '$FACTORY_URL'\n  --factory-reset only accepts a URL as its second argument.\n  Flags like --set-token cannot be combined on one line.\n\n  Run each step separately:\n    sudo bash $0 --factory-reset https://your-url.com\n    sudo bash $0 --set-token YOUR_TOKEN"
+    fi
+
     _factory_reset "$KIOSK_USER"
 
     if [[ -n "$FACTORY_URL" ]]; then
@@ -960,6 +972,12 @@ fi
 if [[ "$1" == "--reset" ]]; then
     # Allow URL to be passed alongside --reset for immediate reinstall
     RESET_URL="${2:-}"
+
+    # Guard: catch accidental flag-as-URL usage
+    if [[ "$RESET_URL" == --* ]]; then
+        err "Unexpected argument after --reset: '$RESET_URL'\n  --reset only accepts a URL as its second argument.\n  Flags cannot be combined on one line.\n\n  Run each step separately:\n    sudo bash $0 --reset https://your-url.com\n    sudo bash $0 --set-token YOUR_TOKEN"
+    fi
+
     _reset_kiosk "$KIOSK_USER"
 
     if [[ -n "$RESET_URL" ]]; then
@@ -979,7 +997,7 @@ fi
 #  Full install
 # =============================================================================
 [[ "$1" != "--reset" && "$1" != "https://"* && "$1" != "http://"* && -n "$1" ]] && \
-    err "Unknown argument: '$1'. Did you mean --reset, --update-url, --set-token, or --enable-rtc?"
+    err "Unknown argument: '$1'.\n  Flags must be run one at a time — they cannot be combined on one line.\n  e.g.  sudo bash $0 --factory-reset https://your-url.com\n        sudo bash $0 --set-token YOUR_TOKEN"
 [[ -z "$1" || "$1" == "--reset" ]] && [[ -z "$RESET_URL" ]] && warn "No URL supplied — defaulting to https://example.com"
 
 # ── Existing install guard ─────────────────────────────────────────────────────
