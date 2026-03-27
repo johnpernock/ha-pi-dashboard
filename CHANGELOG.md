@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.8.0] — 2026-03-27
+
+### Fixed
+
+- **browser_mod ID not registering (critical)** — the `localStorage.setItem("browser_mod-browser-id", ...)` approach was broken in two ways: wrong key name (browser_mod 2.x does not read that key), and wrong origin (localStorage written at `file://` or `/local/` is invisible to the HA frontend at `http://`). Replaced with the official browser_mod 2.x method: appending `?BrowserID=name` to the redirect URL. browser_mod reads this parameter on load and registers with the correct ID without any localStorage manipulation.
+- **`--set-browser-id` using broken preloader** — the standalone preloader written by `_write_bmod_preloader` had the same localStorage/origin bugs and also pointed at `file://` which broke auto-login. Replaced with direct wrapper page update — the `BROWSER_MOD_ID` JS variable in the HA wrapper page is updated in-place and the file is re-copied to the HA www folder automatically.
+- **Stale wrapper page on HA server** — after `--set-browser-id` or token updates, the wrapper page on the HA server (`/config/www/kiosk-ha-login.html`) was not being updated. Script now attempts to re-copy it automatically and prints clear manual instructions if HA is on a different machine.
+- **Token truncation in kiosk.conf** — added explicit warning in `kiosk.conf.example` that `HA_TOKEN` must be on a single line with no line breaks.
+- **Install instructions** — end-of-install output now notes that the wrapper page must be re-copied to HA after running `--set-browser-id` or updating the token.
+
+---
+
 ## [1.7.0] — 2026-03-25
 
 ### Added

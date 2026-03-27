@@ -583,28 +583,13 @@ _write_bmod_preloader() {
     # If no HA wrapper exists, update the autostart URL to point to a
     # standalone pre-loader that seeds the ID then redirects to the dashboard.
     local PRELOADER="$KIOSK_HOME/kiosk-bmod-preloader.html"
-    cat > "$PRELOADER" << HTMLEOF
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Loading...</title>
-<style>body{margin:0;background:#000;display:flex;align-items:center;
-justify-content:center;height:100vh;font-family:sans-serif;}
-.msg{color:#4fc3f7;font-size:1.1rem;opacity:0;animation:f .5s ease .2s forwards;}
-@keyframes f{to{opacity:1;}}</style></head>
-<body><p class="msg">Starting kiosk...</p>
-<script>
-(function(){
-  var BMID = "$BM_ID";
-  var TARGET = "$(grep "KIOSK_URL_VALUE=" "$AUTOSTART_FILE" 2>/dev/null | head -1 | sed "s/.*KIOSK_URL_VALUE=//" || echo "$KIOSK_URL")";
-  try { localStorage.setItem("browser_mod-browser-id", BMID); } catch(e){}
-  window.location.replace(TARGET);
-})();
-</script></body></html>
-HTMLEOF
-    chown "$KIOSK_USER:$KIOSK_USER" "$PRELOADER"
-    # Update autostart to launch the preloader
-    sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=file://$PRELOADER|" "$AUTOSTART_FILE"
-    sed -i "s|^URL=.*|URL=file://$PRELOADER|" "$INSTALL_MARKER"
+    # Preloader not needed — ?BrowserID= param handles ID via URL directly.
+    # Just update the BROWSER_MOD_ID in the HA wrapper page and restart.
+    # This function is kept for backward compatibility but no longer writes
+    # a file:// preloader since that approach was broken (wrong localStorage
+    # key, wrong origin). The --set-browser-id handler now updates the
+    # wrapper page directly.
+    log "Preloader not used — ?BrowserID= handles ID via URL parameter"
 }
 
 if [[ "$1" == "--set-browser-id" ]]; then
@@ -623,22 +608,27 @@ if [[ "$1" == "--set-browser-id" ]]; then
     hr; banner "  browser_mod Browser ID Update"; hr; echo ""
     info "New Browser ID : $NEW_BM_ID"
 
-    UPDATED=false
-    # Try HA wrapper page first
+    # Update BROWSER_MOD_ID in wrapper page JS (uses ?BrowserID= URL param)
     if [[ -f "$WRAPPER" ]]; then
         sed -i "s|var BROWSER_MOD_ID = \".*\";|var BROWSER_MOD_ID = \"$NEW_BM_ID\";|" "$WRAPPER"
-        grep -q "$NEW_BM_ID" "$WRAPPER" && { log "Updated in HA wrapper: $WRAPPER"; UPDATED=true; }
-    fi
-    # Try standalone preloader
-    if [[ -f "$PRELOADER" ]]; then
-        sed -i "s|var BMID = \".*\";|var BMID = \"$NEW_BM_ID\";|" "$PRELOADER"
-        grep -q "$NEW_BM_ID" "$PRELOADER" && { log "Updated in preloader: $PRELOADER"; UPDATED=true; }
-    fi
-    # Neither exists -- create a standalone preloader
-    if ! $UPDATED; then
-        _write_bmod_preloader "$NEW_BM_ID"
-        log "Standalone preloader created: $PRELOADER"
-        UPDATED=true
+        log "Updated BROWSER_MOD_ID in wrapper: $WRAPPER"
+
+        # Re-copy updated wrapper to HA www folder
+        for HA_CFG_DIR in /config /root/config /home/homeassistant/.homeassistant /usr/share/hassio/homeassistant; do
+            if [[ -d "$HA_CFG_DIR/www" ]]; then
+                cp "$WRAPPER" "$HA_CFG_DIR/www/kiosk-ha-login.html" 2>/dev/null && {
+                    log "Updated wrapper copied to HA: $HA_CFG_DIR/www/kiosk-ha-login.html"
+                    break
+                }
+            fi
+        done
+
+        echo ""
+        warn "If HA is on a different machine, re-copy the wrapper page:"
+        echo "    cp $WRAPPER <HA_CONFIG>/www/kiosk-ha-login.html"
+        echo "    Accessible at: $HA_URL/local/kiosk-ha-login.html"
+    else
+        warn "No wrapper page found. Re-run a full install with ENABLE_BROWSER_MOD=true."
     fi
 
     # Persist to dedicated file and install marker
@@ -2059,6 +2049,7 @@ if $HA_AUTO_LOGIN && [[ -n "$HA_TOKEN" ]]; then
     echo ""
     echo "  File on this Pi:  $HA_WRAPPER_PATH"
     echo "  Copy to HA:       /config/www/kiosk-ha-login.html"
+    echo "  (Re-copy this file whenever you run --set-browser-id or update the token)"
     echo ""
     echo "  Options:"
     echo "    A) HA Terminal add-on:"

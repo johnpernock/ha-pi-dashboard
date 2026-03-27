@@ -23,7 +23,7 @@
 # ── Home Assistant auto-login ─────────────────────────────────────────────────
 # HA_AUTO_LOGIN=true
 # HA_URL="http://192.168.1.149:8123"
-# HA_TOKEN="your-long-lived-token-here"
+# HA_TOKEN="your-long-lived-token-here"   # must be on ONE line — no line breaks
 # HA_DASHBOARD_PATH="/dashboard-wall/home"
 
 # ── browser_mod ───────────────────────────────────────────────────────────────
