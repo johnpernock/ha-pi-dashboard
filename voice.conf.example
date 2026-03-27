@@ -34,6 +34,25 @@
 # okay_nabu (default) | hey_jarvis | alexa
 # VOICE_WAKE_WORD="okay_nabu"
 
+# ── Speaker output routing ────────────────────────────────────────────────────
+# By default the speaker uses the same audio card as the microphone.
+# Set this if you want audio to come out of a different device — for example
+# mic on the 2-Mic HAT but sound through HDMI or the Pi headphone jack.
+#
+# Options:
+#   hdmi         — HDMI 1 (default HDMI on Pi 3, vc4hdmi0 on Pi 4/5)
+#   hdmi2        — HDMI 2 (Pi 4 and Pi 5 only)
+#   headphone    — 3.5mm headphone jack
+#   usb_speaker  — first detected USB audio output
+#   (any other value is used as a literal ALSA device name, e.g. plughw:2,0)
+#
+# Examples:
+#   VOICE_SPEAKER_OUTPUT="hdmi"          # mic on HAT, audio through TV/display
+#   VOICE_SPEAKER_OUTPUT="headphone"     # mic on USB, audio through 3.5mm jack
+#   VOICE_SPEAKER_OUTPUT="plughw:2,0"    # explicit card number from aplay -l
+#
+# VOICE_SPEAKER_OUTPUT=""
+
 # ── Satellite name and port ───────────────────────────────────────────────────
 # Port 6053 is the ESPHome default — HA discovers it automatically via mDNS
 # Only change if you have a port conflict

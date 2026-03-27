@@ -44,6 +44,16 @@ VOICE_WAKE_WORD="okay_nabu"
 # Port for ESPHome server (HA discovers this automatically)
 VOICE_PORT=6053
 
+# Speaker output routing — separate from microphone
+# Leave blank to use the same card as the microphone (default)
+# Options:
+#   hdmi         — HDMI 1 (vc4hdmi0 on Pi 4/5, HDMI on Pi 3)
+#   hdmi2        — HDMI 2 (Pi 4/5 second HDMI port)
+#   headphone    — 3.5mm headphone jack (Pi built-in)
+#   usb_speaker  — first USB audio output device
+#   (anything else is treated as a literal ALSA device name)
+VOICE_SPEAKER_OUTPUT=""
+
 # Home Assistant details (only needed if auto-discovery fails)
 VOICE_HA_HOST=""
 VOICE_HA_PORT=6053
@@ -141,7 +151,70 @@ _resolve_devices() {
             ;;
     esac
 
-    # Manual overrides always win
+    # ── Speaker output override ────────────────────────────────────────────────
+    # VOICE_SPEAKER_OUTPUT lets you route audio to a different output than
+    # the mic card — useful when your mic is on a HAT but speakers are on HDMI,
+    # a USB DAC, or the Pi headphone jack.
+    case "${VOICE_SPEAKER_OUTPUT:-}" in
+        hdmi|hdmi1)
+            # HDMI output — Pi has vc4hdmi0 (Pi 4/5) or bcm2835 HDMI (Pi 3)
+            local hdmi_card
+            hdmi_card=$(aplay -l 2>/dev/null | grep -i "vc4hdmi0\|vc4-hdmi\|bcm2835.*HDMI" | head -1 | grep -oP 'card \K[0-9]+')
+            if [[ -n "$hdmi_card" ]]; then
+                RESOLVED_SPK="plughw:${hdmi_card},0"
+                log "Speaker routed to HDMI (card ${hdmi_card})"
+            else
+                warn "HDMI audio device not found — check: aplay -l"
+                RESOLVED_SPK="default"
+            fi
+            ;;
+        hdmi2)
+            local hdmi_card
+            hdmi_card=$(aplay -l 2>/dev/null | grep -i "vc4hdmi1" | head -1 | grep -oP 'card \K[0-9]+')
+            if [[ -n "$hdmi_card" ]]; then
+                RESOLVED_SPK="plughw:${hdmi_card},0"
+                log "Speaker routed to HDMI 2 (card ${hdmi_card})"
+            else
+                warn "HDMI2 audio device not found — falling back to HDMI1"
+                VOICE_SPEAKER_OUTPUT="hdmi1"
+                _resolve_devices "$hw"
+                return
+            fi
+            ;;
+        headphone|jack|3.5mm)
+            # Pi 3.5mm headphone jack (bcm2835 Headphones)
+            local hp_card
+            hp_card=$(aplay -l 2>/dev/null | grep -i "Headphones\|bcm2835.*Head" | head -1 | grep -oP 'card \K[0-9]+')
+            if [[ -n "$hp_card" ]]; then
+                RESOLVED_SPK="plughw:${hp_card},0"
+                log "Speaker routed to headphone jack (card ${hp_card})"
+            else
+                warn "Headphone jack not found — check: aplay -l"
+                RESOLVED_SPK="default"
+            fi
+            ;;
+        usb_dac|usb_speaker)
+            local usb_card
+            usb_card=$(aplay -l 2>/dev/null | grep -i "USB\|usb" | head -1 | grep -oP 'card \K[0-9]+')
+            if [[ -n "$usb_card" ]]; then
+                RESOLVED_SPK="plughw:${usb_card},0"
+                log "Speaker routed to USB DAC/speaker (card ${usb_card})"
+            else
+                warn "USB speaker not found — check: aplay -l"
+                RESOLVED_SPK="default"
+            fi
+            ;;
+        "")
+            : # No override — use the card default resolved above
+            ;;
+        *)
+            # Treat any other value as a literal device name
+            RESOLVED_SPK="$VOICE_SPEAKER_OUTPUT"
+            log "Speaker set to custom device: $RESOLVED_SPK"
+            ;;
+    esac
+
+    # Explicit device name overrides always win over everything above
     [[ -n "$VOICE_MIC_DEVICE" ]]     && RESOLVED_MIC="$VOICE_MIC_DEVICE"
     [[ -n "$VOICE_SPEAKER_DEVICE" ]] && RESOLVED_SPK="$VOICE_SPEAKER_DEVICE"
 }
