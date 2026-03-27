@@ -561,6 +561,11 @@ if [[ "$1" == "--set-token" ]]; then
     fi
 
     echo ""
+    echo ""
+    warn "If HA is on a different machine, recopy the updated wrapper page:"
+    echo "    cat $WRAPPER   # copy the output into HA File Editor"
+    echo "    at: /config/www/kiosk-ha-login.html"
+    echo ""
     warn "Restart Chromium to apply (watchdog relaunches automatically):"
     echo "    sudo pkill chromium"
     echo "  — or reboot:"
@@ -1991,21 +1996,10 @@ if $ENABLE_BROWSER_MOD; then
         done
     fi
 
-    # 2. Append ?BrowserID= to the autostart URL so it is set even before
-    #    the wrapper page JS runs — belt and suspenders
-    if [[ -f "$AUTOSTART_FILE" ]]; then
-        CURRENT_URL=$(grep "KIOSK_URL_VALUE=" "$AUTOSTART_FILE" | head -1 | sed "s/.*KIOSK_URL_VALUE=//")
-        # Strip any existing BrowserID param then add the resolved one
-        CLEAN_URL=$(echo "$CURRENT_URL" | sed 's/?BrowserID=[^&]*//;s/&BrowserID=[^&]*//')
-        if [[ "$CLEAN_URL" == *"?"* ]]; then
-            NEW_URL="${CLEAN_URL}&BrowserID=${BROWSER_MOD_ID}"
-        else
-            NEW_URL="${CLEAN_URL}?BrowserID=${BROWSER_MOD_ID}"
-        fi
-        sed -i "s|KIOSK_URL_VALUE=.*|KIOSK_URL_VALUE=${NEW_URL}|" "$AUTOSTART_FILE"
-        sed -i "s|^URL=.*|URL=${NEW_URL}|" "$INSTALL_MARKER"
-        log "Autostart URL updated with BrowserID: $NEW_URL"
-    fi
+    # 2. The wrapper page JS already appends ?BrowserID= to the dashboard
+    #    redirect URL. No need to modify the autostart URL — the wrapper
+    #    page URL stays clean (just /local/kiosk-ha-login.html).
+    log "Browser ID will be set via wrapper page redirect: $BROWSER_MOD_ID"
     echo ""
     warn "browser_mod requires manual setup steps after reboot:"
     echo ""
@@ -2052,6 +2046,35 @@ echo -e "  ${CYAN}browser_mod    :${NC} $(${ENABLE_BROWSER_MOD} && echo "Enabled
 if $ENABLE_BROWSER_MOD; then
     echo -e "  ${CYAN}  Browser ID   :${NC} $BROWSER_MOD_ID"
     echo -e "  ${CYAN}  ID file      :${NC} /etc/kiosk-browser-mod-id  (cat to retrieve)"
+fi
+if $HA_AUTO_LOGIN && [[ -n "$HA_TOKEN" ]]; then
+    echo ""
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${YELLOW}  ACTION REQUIRED — Copy wrapper page to HA server${NC}"
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo "  The HA login wrapper page must be on your HA server to work."
+    echo "  Every time you run --reset or change the token/browser ID,"
+    echo "  you must recopy this file."
+    echo ""
+    echo "  File on this Pi:  $HA_WRAPPER_PATH"
+    echo "  Copy to HA:       /config/www/kiosk-ha-login.html"
+    echo ""
+    echo "  Options:"
+    echo "    A) HA Terminal add-on:"
+    echo "       paste the output of:  cat $HA_WRAPPER_PATH"
+    echo "       into:  /config/www/kiosk-ha-login.html"
+    echo ""
+    echo "    B) If HA is on same machine / accessible path:"
+    echo "       cp $HA_WRAPPER_PATH /config/www/kiosk-ha-login.html"
+    echo ""
+    echo "    C) scp (replace USER and HA_IP):"
+    echo "       scp $HA_WRAPPER_PATH USER@HA_IP:/config/www/kiosk-ha-login.html"
+    echo ""
+    echo "  Verify it works at:"
+    echo "    $HA_WRAPPER_URL"
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
 fi
 echo -e "  ${CYAN}Waveshare 10DP :${NC} $(${WAVESHARE_10DP} && echo "Configured (1280x800 DDC/CI)" || echo "Not configured")"
 echo -e "  ${CYAN}Watchdog       :${NC} $($HAS_HW_WATCHDOG && echo "Hardware (15s)" || echo "None — software-only")"
