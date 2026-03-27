@@ -511,11 +511,11 @@ cat /sys/class/backlight/*/max_brightness
 
 ## Home Assistant Auto-Login
 
-For Home Assistant dashboards on a local network, the script supports two auto-login methods that work together as belt-and-suspenders. Configure both for the most reliable result.
+The recommended and simplest setup is **Trusted Networks only** — no token, no files to copy to HA, nothing extra to maintain. The token wrapper page is an optional belt-and-suspenders fallback if you want it.
 
-### Method 1 — Trusted Networks (HA side, recommended)
+### Method 1 — Trusted Networks (recommended, no token needed)
 
-Tells Home Assistant to automatically authenticate any device connecting from your local subnet. No credentials are stored on the Pi — HA trusts the network origin.
+Tells HA to automatically authenticate any device on your local subnet. Set `HA_AUTO_LOGIN=true` and leave `HA_TOKEN=""` in `kiosk.conf`. The script prints the exact YAML block to add to HA during install.
 
 **Add to `configuration.yaml` on your HA instance:**
 
@@ -524,79 +524,74 @@ homeassistant:
   auth_providers:
     - type: trusted_networks
       trusted_networks:
-        - 192.168.1.0/24      # replace with your subnet (script auto-detects this)
+        - 192.168.1.0/24      # your subnet — script auto-detects and prints this
         - 127.0.0.1
       trusted_users:
         192.168.1.0/24:
-          - user_id: YOUR_HA_USER_ID   # see below
+          - user_id: YOUR_HA_USER_ID
       allow_bypass_login: true
-    - type: homeassistant    # keep this so other devices can still log in normally
+    - type: homeassistant    # keep this so other devices still log in normally
 ```
 
 **Finding `YOUR_HA_USER_ID`:**
-HA → Settings → People → click your user → copy the ID from the browser URL bar (looks like `a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4`).
+HA → Settings → People → click your user → copy the long hex ID from the browser URL bar.
 
 **After editing:**
-HA → Developer Tools → Check Configuration → Restart HA
+HA → Developer Tools → Check Configuration → Restart HA.
 
-> **Rotating your token?** Use `--set-token` to update the wrapper page without reinstalling — see [Updating the Token](#updating-the-token) below.
-
-> The script auto-detects your local subnet from the Pi's default route and prints the exact YAML block during install — you can copy it directly.
+With `allow_bypass_login: true` HA skips both the login screen and the user selection screen entirely for local network devices.
 
 ---
 
-### Method 2 — Token Wrapper Page (Pi side)
+### Method 2 — Token Wrapper Page (optional, belt-and-suspenders)
 
-A tiny local HTML file served from the Pi that injects a long-lived access token into Chromium's localStorage before redirecting to your HA dashboard. HA's frontend reads this token on load and skips the login screen.
+If you want a fallback that doesn't rely on Trusted Networks, set `HA_TOKEN` to a long-lived access token. The script generates `~/kiosk-ha-login.html` which injects the token into HA's localStorage and then redirects to your dashboard.
 
-**Create a long-lived access token in HA:**
-HA → Profile (bottom left) → Long-Lived Access Tokens → Create Token → copy it
-
-**Set in `kiosk-setup.sh` before running:**
+**Important:** The wrapper page must be served from the HA origin, not from `file://`. Copy it to your HA server after install:
 
 ```bash
-HA_AUTO_LOGIN=true
-HA_URL="http://homeassistant.local:8123"   # or your HA IP
-HA_TOKEN="your-long-lived-token-here"
-HA_DASHBOARD_PATH="/lovelace/0"            # or your dashboard path
+# Get the file contents from the Pi
+cat ~/kiosk-ha-login.html
+# Paste into /config/www/kiosk-ha-login.html via HA File Editor or Terminal add-on
 ```
 
-The script will:
-1. Generate `~/kiosk-ha-login.html` containing your token
-2. Set the kiosk start URL to `file://~/kiosk-ha-login.html`
-3. The wrapper loads instantly (local file), injects the token, then redirects to HA
+The wrapper is then accessible at `http://HA_IP:8123/local/kiosk-ha-login.html` and the kiosk URL is set to that address automatically.
 
-> **Security note:** The token is stored in a local file on the Pi. It is only readable by the kiosk user. Anyone with physical or SSH access to the Pi could read it. For a wall-panel on a trusted LAN this is acceptable; for a publicly accessible Pi it is not.
+**Create a long-lived access token:**
+HA → Profile → Long-Lived Access Tokens → Create Token → copy it
+
+**Set in `kiosk.conf`:**
+```bash
+HA_AUTO_LOGIN=true
+HA_URL="http://192.168.1.149:8123"
+HA_TOKEN="your-token-here"            # must be on ONE line — no line breaks
+HA_DASHBOARD_PATH="/dashboard-wall/home"
+```
+
+> **Security note:** The token is stored in a local file on the Pi, readable by the kiosk user. Acceptable for a wall panel on a trusted LAN.
 
 ---
 
 ### Using Both Together
 
-Trusted Networks handles auth at the HA server level. The wrapper page handles it at the browser level. Using both means auto-login works even if:
-- Trusted Networks config has a typo (wrapper page recovers)
-- The wrapper page fails (Trusted Networks recovers)
-- HA is updated and changes localStorage key format (Trusted Networks recovers)
-
-**To enable both:** set `HA_AUTO_LOGIN=true`, `HA_URL`, `HA_TOKEN`, and `HA_DASHBOARD_PATH` in the config block, then run the install. The Trusted Networks YAML is printed at the end for you to copy into HA.
+With both Trusted Networks and a token set, `allow_bypass_login: true` handles auth at the HA server level, and the wrapper page handles it at the browser level. Either one alone is sufficient for most setups.
 
 ---
 
 ### Updating the Token
 
-When a long-lived token expires or you rotate it for security, update it without reinstalling:
-
 ```bash
-sudo bash kiosk-setup.sh --set-token YOUR_NEW_LONG_LIVED_TOKEN
-sudo pkill chromium   # watchdog relaunches with the new token automatically
+sudo bash kiosk-setup.sh --set-token YOUR_NEW_TOKEN
+sudo pkill chromium
 ```
 
-This replaces the token in `~/kiosk-ha-login.html` only. No other configuration is touched.
+Re-copy `~/kiosk-ha-login.html` to `/config/www/` on your HA server after updating.
 
 ---
 
-### Using Trusted Networks Only (no token)
+### Using Trusted Networks Only (no token, simplest setup)
 
-If you prefer not to store a token on the Pi, leave `HA_TOKEN=""` and just add the Trusted Networks YAML to HA. The `HA_AUTO_LOGIN=true` flag will print the YAML but skip generating the wrapper page.
+Leave `HA_TOKEN=""` in `kiosk.conf`. The script skips the wrapper page entirely and points Chromium directly at your dashboard URL. Nothing to copy to the HA server. This is the recommended default.
 
 ---
 
@@ -778,26 +773,32 @@ Confirm you added the YAML block printed during install to `configuration.yaml` 
 **Check 2 — Wrong subnet in the YAML:**
 The script auto-detects the subnet from the Pi's default route. If your network changed since install, update the subnet in `configuration.yaml` manually and restart HA.
 
-**Check 3 — Token wrapper not loading:**
-Confirm `~/kiosk-ha-login.html` exists and is readable:
-```bash
-ls -la ~/kiosk-ha-login.html
-cat ~/kiosk-ha-login.html | grep TOKEN
-```
+**Check 3 — allow_bypass_login missing:**
+The user selection screen appears (pick which user) when `allow_bypass_login: true` is missing from the Trusted Networks YAML. Add it and restart HA.
 
-**Check 4 — Token expired or revoked:**
-Rotate the token in HA (Profile → Long-Lived Access Tokens) then update the Pi:
+**Check 4 — Token wrapper not loading (if using HA_TOKEN):**
+If using a token, confirm the wrapper page is on the HA server:
+```bash
+# From the Pi — does the URL respond?
+curl -I http://192.168.1.149:8123/local/kiosk-ha-login.html
+# Should return HTTP 200, not 404
+```
+If 404, copy `~/kiosk-ha-login.html` to `/config/www/kiosk-ha-login.html` on the HA server via File Editor.
+
+**Check 5 — Token expired or revoked:**
 ```bash
 sudo bash kiosk-setup.sh --set-token YOUR_NEW_TOKEN
 sudo pkill chromium
 ```
+Re-copy `~/kiosk-ha-login.html` to `/config/www/` on the HA server after updating.
 
-**Check 5 — HA URL mismatch:**
-If your HA IP changed, the token wrapper will redirect to the old address. Update it:
+**Check 6 — HA IP changed:**
+Update `kiosk.conf` with the new IP and reset:
 ```bash
-sudo bash kiosk-setup.sh --reset https://your-new-ha-url:8123
+nano ~/ha-pi-dashboard/kiosk.conf   # update HA_URL
+sudo bash ~/ha-pi-dashboard/kiosk-setup.sh --reset http://NEW_IP:8123/dashboard-wall/home
+sudo reboot
 ```
-Then re-set `HA_AUTO_LOGIN=true`, `HA_URL`, and `HA_TOKEN` in the config block before reinstalling.
 
 **Token injection not working — localStorage origin mismatch:**
 The wrapper page must be served from the **same origin as HA** (`http://HA_IP:8123/local/...`), not from `file://`. localStorage is strictly origin-scoped — a token written at `file://` is invisible to HA at `http://`.
@@ -817,25 +818,41 @@ If it shows `file://`, the wrapper page needs to be on your HA server:
 
 ### browser_mod not registering the kiosk
 
-**Check 0 — retrieve the stored Browser ID:**
+**How browser_mod ID works in this setup:**
+The script appends `?BrowserID=your-id` to the kiosk URL. browser_mod reads this parameter when the HA frontend loads and registers with that ID. No localStorage manipulation, no files to copy — just a URL parameter.
+
+**Check 1 — BrowserID in the URL:**
 ```bash
-cat /etc/kiosk-browser-mod-id
+grep "KIOSK_URL_VALUE" ~/.config/labwc/autostart   # Trixie
+grep "KIOSK_URL_VALUE" ~/.config/lxsession/LXDE-pi/autostart  # Bookworm
 ```
-If this file exists and has a value, that's the ID browser_mod should register with. If the file is missing, the kiosk was installed without `ENABLE_BROWSER_MOD=true`.
+The URL must include `?BrowserID=your-id`. If it doesn't, confirm `ENABLE_BROWSER_MOD=true` and `BROWSER_MOD_ID="your-id"` are set in `kiosk.conf` and re-run `--reset`.
 
-**Check 1 — incognito mode still active:**
-Confirm `ENABLE_BROWSER_MOD=true` was set before running the install. The script switches from `--incognito` to `--user-data-dir` when enabled. Check the autostart file:
+**Check 2 — incognito mode active:**
+browser_mod requires a persistent Chromium profile to maintain registration across restarts. Confirm `--user-data-dir` is in the Chromium flags, not `--incognito`:
 ```bash
-grep "incognito\|user-data-dir" ~/.config/labwc/autostart        # Trixie
-grep "incognito\|user-data-dir" ~/.config/lxsession/LXDE-pi/autostart  # Bookworm
+grep "incognito\|user-data-dir" ~/.config/labwc/autostart
 ```
-If `--incognito` is still there, re-run the install with `ENABLE_BROWSER_MOD=true`.
+If `--incognito` appears, `ENABLE_BROWSER_MOD=true` wasn't set during install. Re-run `--reset`.
 
-**Check 2 — browser_mod not installed in HA:**
-Confirm browser_mod is installed via HACS and the integration is added in Settings → Devices & Services.
+**Check 3 — Profile directory exists:**
+```bash
+ls ~/.config/chromium-kiosk/Default/
+```
+If this directory is missing or empty, the persistent profile never got created. Re-run `--reset` with `ENABLE_BROWSER_MOD=true`.
 
-**Check 3 — kiosk not appearing in Browser Mod panel:**
-Navigate to the Browser Mod sidebar panel. If the kiosk isn't listed, reload the kiosk page (`sudo pkill chromium` — watchdog relaunches it) and wait 10 seconds.
+**Check 4 — browser_mod installed in HA:**
+Confirm browser_mod is installed via HACS and the integration is added in Settings → Devices & Services. Check the Browser Mod panel in the HA sidebar — the kiosk should appear within 10 seconds of Chromium loading.
+
+**Check 5 — Kiosk appears with wrong/random ID:**
+browser_mod may be holding an old registration on the HA side. Fix it without touching the Pi:
+- HA → Browser Mod panel (sidebar) → find the kiosk → click its ID → rename it to the correct value
+
+**Check 6 — Register toggle:**
+In the Browser Mod panel, confirm the Register toggle is on for the kiosk. Without it, the kiosk connects but doesn't create HA entities.
+
+**Check 7 — browser_mod interaction icon not visible:**
+The interaction icon (small circle, bottom-right of HA) signals that browser_mod needs a user gesture before it can play audio/video. In kiosk mode with `--kiosk` the browser chrome is hidden but the HA page content still shows. If you can't see or click the icon, rename the browser ID from the HA Browser Mod panel instead — that doesn't require any interaction on the kiosk display.
 
 ### Display API not responding
 
@@ -1063,7 +1080,47 @@ sudo systemctl restart ssh
 Do this only after confirming your SSH key works for login.
 
 ### Multiple kiosk displays
-The repo is structured per-device, but for fleets of displays, a simple `deploy.sh` that loops over a list of Pi IPs and runs `ssh pi@IP sudo bash kiosk-setup.sh --update-url NEW_URL` makes bulk URL updates trivial.
+
+Each Pi gets its own clone of the repo and its own `kiosk.conf`. The only value that differs between displays is `BROWSER_MOD_ID`.
+
+**Example — two wall panels:**
+
+Pi 1 `kiosk.conf`:
+```bash
+KIOSK_URL="http://192.168.1.149:8123/dashboard-wall/home"
+HA_AUTO_LOGIN=true
+HA_URL="http://192.168.1.149:8123"
+HA_TOKEN=""
+HA_DASHBOARD_PATH="/dashboard-wall/home"
+ENABLE_BROWSER_MOD=true
+BROWSER_MOD_ID="kiosk-front-door"
+ENABLE_DISPLAY_API=true
+WAVESHARE_10DP=true
+REMOVE_BLOAT=true
+```
+
+Pi 2 `kiosk.conf`:
+```bash
+KIOSK_URL="http://192.168.1.149:8123/dashboard-wall/home"
+HA_AUTO_LOGIN=true
+HA_URL="http://192.168.1.149:8123"
+HA_TOKEN=""
+HA_DASHBOARD_PATH="/dashboard-wall/home"
+ENABLE_BROWSER_MOD=true
+BROWSER_MOD_ID="kiosk-garage"
+ENABLE_DISPLAY_API=true
+WAVESHARE_10DP=true
+REMOVE_BLOAT=true
+```
+
+The `?BrowserID=` parameter is appended to each Pi's URL automatically so both register with correct, distinct IDs in browser_mod. No wrapper page or file copying required when using Trusted Networks.
+
+**Updating all displays at once:**
+```bash
+for IP in 192.168.1.x 192.168.1.y; do
+  ssh johnpernock@$IP "cd ~/ha-pi-dashboard && git pull && sudo bash kiosk-setup.sh --update-url http://192.168.1.149:8123/dashboard-wall/home"
+done
+```
 
 ---
 

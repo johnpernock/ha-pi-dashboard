@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.11.0] — 2026-03-27
+
+### Documentation
+
+- **README: HA Auto-Login section rewritten** — now leads with the recommended Trusted Networks-only setup (simplest, no files to copy). Token wrapper page documented as an optional fallback. Updated to reflect that `kiosk.conf` is the right place for all config, not editing the script directly.
+- **README: browser_mod troubleshooting rewritten** — documents all failure modes discovered during real-world install: wrong localStorage key, wrong origin (`file://` vs `http://`), incognito blocking persistence, profile directory missing, wrong/random ID on HA side, Register toggle, interaction icon in kiosk mode. Correct fix documented for each.
+- **README: Multiple kiosk displays section rewritten** — full example `kiosk.conf` for two Pi wall panels with different `BROWSER_MOD_ID` values. Documents that `?BrowserID=` is appended automatically and no wrapper page copying is needed with Trusted Networks.
+- **README: HA login screen troubleshooting updated** — added `allow_bypass_login: true` check for user-selection screen, curl test for wrapper page 404, updated token rotation steps to include re-copy to HA server.
+- **README: `file://` references removed** — all outdated references to loading the wrapper page from `file://` replaced with the correct `http://HA_IP/local/` approach.
+
+---
+
 ## [1.10.0] — 2026-03-27
 
 ### Changed
