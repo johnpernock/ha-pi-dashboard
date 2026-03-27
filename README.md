@@ -1043,7 +1043,7 @@ xinput list                             # Bookworm/X11 — confirm touch device 
 Based on the full setup, here are features worth considering next:
 
 ### Popup automations — companion repo
-The [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) repo contains ready-to-use browser_mod popup cards for this kiosk setup:
+The [ha-custom-automation](https://github.com/johnpernock/ha-custom-automation) repo contains ready-to-use browser_mod popup cards for this kiosk setup (in `kiosk/popups/`):
 - **NWS weather alerts** — severity-tiered (Extreme/Severe/Moderate/Minor), color-coded, wakes displays
 - **Doorbell camera** — 30-second live feed on both displays when the bell rings
 - **SEPTA train delays** — fires when your next train exceeds a delay threshold; matches the septa-paoli-card in the dashboard
@@ -1140,7 +1140,6 @@ Supports ReSpeaker 2-Mic HAT V2.0, ReSpeaker Lite (USB), generic USB mic, or any
 |---|---|
 | [ha-pi-smarthome](https://github.com/johnpernock/ha-pi-smarthome) | This repo — kiosk OS setup, display API, browser_mod wiring |
 | [ha-custom-cards](https://github.com/johnpernock/ha-custom-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
-| [ha-kiosk-automation](https://github.com/johnpernock/ha-kiosk-automation) | Kiosk display schedule — power off at night, on in morning |
 | [ha-voice-sattelite](https://github.com/johnpernock/ha-voice-sattelite) | Voice satellite installer — LVA + ReSpeaker, ESPHome protocol |
 
 ---
