@@ -1657,16 +1657,19 @@ _setup_ha_autologin() {
         // localStorage unavailable on file:// — fall through to direct redirect
       }
 
-      // Pre-seed the browser_mod Browser ID so it registers with a known,
-      // stable identity rather than a random UUID on every fresh profile.
+      // Set the browser_mod Browser ID via URL parameter — the official
+      // browser_mod 2.x method (?BrowserID=name appended to any HA URL).
+      // This is more reliable than localStorage since it doesn't depend on
+      // origin timing or the correct localStorage key name.
       var BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
+      var destination = HA_URL + HA_PATH;
       if (BROWSER_MOD_ID) {
-        try { localStorage.setItem("browser_mod-browser-id", BROWSER_MOD_ID); } catch(e) {}
+        destination += (destination.indexOf('?') === -1 ? '?' : '&')
+                     + 'BrowserID=' + encodeURIComponent(BROWSER_MOD_ID);
       }
 
-      // Navigate to HA dashboard. Trusted Networks handles auth server-side;
-      // the localStorage token is a belt-and-suspenders fallback.
-      window.location.replace(HA_URL + HA_PATH);
+      // Navigate to HA dashboard.
+      window.location.replace(destination);
     })();
   </script>
 </body>
@@ -1737,10 +1740,13 @@ justify-content:center;height:100vh;font-family:sans-serif;}
 (function(){
   var BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
   var TARGET         = "${KIOSK_URL}";
+  // Set browser_mod ID via official URL parameter (?BrowserID=name)
+  var destination = TARGET;
   if (BROWSER_MOD_ID) {
-    try { localStorage.setItem("browser_mod-browser-id", BROWSER_MOD_ID); } catch(e) {}
+    destination += (destination.indexOf('?') === -1 ? '?' : '&')
+                 + 'BrowserID=' + encodeURIComponent(BROWSER_MOD_ID);
   }
-  window.location.replace(TARGET);
+  window.location.replace(destination);
 })();
 </script></body></html>
 HTMLEOF
