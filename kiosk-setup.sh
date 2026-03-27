@@ -1719,7 +1719,18 @@ HTMLEOF
         echo "    (injects auth token then redirects to ${HA_URL}${HA_DASHBOARD_PATH})"
         echo ""
     else
-        info "No HA_TOKEN set — wrapper page skipped."
+        info "No HA_TOKEN set — using Trusted Networks auth only (no wrapper page needed)."
+        # Still append BrowserID to the direct dashboard URL
+        if $ENABLE_BROWSER_MOD && [[ -n "$BROWSER_MOD_ID" ]]; then
+            if [[ "$KIOSK_URL" == *"?"* ]]; then
+                DIRECT_URL="${KIOSK_URL}&BrowserID=${BROWSER_MOD_ID}"
+            else
+                DIRECT_URL="${KIOSK_URL}?BrowserID=${BROWSER_MOD_ID}"
+            fi
+            sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=$DIRECT_URL|" "$AUTOSTART_FILE"
+            sed -i "s|^URL=.*|URL=$DIRECT_URL|" "$INSTALL_MARKER"
+            log "Direct URL with BrowserID: $DIRECT_URL"
+        fi
         info "Trusted Networks alone will handle auto-login."
         info "Make sure you add the YAML above to configuration.yaml."
     fi
@@ -1731,37 +1742,24 @@ else
     info "HA auto-login disabled (HA_AUTO_LOGIN=false). Set to true to enable."
 fi
 
-# If browser_mod is enabled but HA wrapper was NOT generated (no HA_AUTO_LOGIN),
-# create a standalone preloader that seeds the Browser ID then redirects.
-if $ENABLE_BROWSER_MOD && ! $HA_AUTO_LOGIN; then
-    PRELOADER_PATH="$KIOSK_HOME/kiosk-bmod-preloader.html"
-    log "Creating standalone browser_mod ID preloader..."
-    cat > "$PRELOADER_PATH" << HTMLEOF
-<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Loading...</title>
-<style>body{margin:0;background:#000;display:flex;align-items:center;
-justify-content:center;height:100vh;font-family:sans-serif;}
-.msg{color:#4fc3f7;font-size:1.1rem;opacity:0;animation:f .5s ease .2s forwards;}
-@keyframes f{to{opacity:1;}}</style></head>
-<body><p class="msg">Starting kiosk...</p>
-<script>
-(function(){
-  var BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
-  var TARGET         = "${KIOSK_URL}";
-  // Set browser_mod ID via official URL parameter (?BrowserID=name)
-  var destination = TARGET;
-  if (BROWSER_MOD_ID) {
-    destination += (destination.indexOf('?') === -1 ? '?' : '&')
-                 + 'BrowserID=' + encodeURIComponent(BROWSER_MOD_ID);
-  }
-  window.location.replace(destination);
-})();
-</script></body></html>
-HTMLEOF
-    chown "$KIOSK_USER:$KIOSK_USER" "$PRELOADER_PATH"
-    sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=file://$PRELOADER_PATH|" "$AUTOSTART_FILE"
-    sed -i "s|^URL=.*|URL=file://$PRELOADER_PATH|" "$INSTALL_MARKER"
-    log "Autostart updated to use browser_mod preloader"
+# If browser_mod is enabled, append ?BrowserID= directly to the kiosk URL.
+# No wrapper page or preloader file needed — browser_mod reads the parameter
+# from any HA URL. Works whether HA_AUTO_LOGIN is on or off.
+if $ENABLE_BROWSER_MOD && [[ -n "$BROWSER_MOD_ID" ]]; then
+    # Only append if not already set (HA wrapper URL already includes it)
+    if ! grep -q "BrowserID=" "$AUTOSTART_FILE" 2>/dev/null; then
+        CURRENT_URL=$(grep "^  KIOSK_URL_VALUE=" "$AUTOSTART_FILE" | head -1 | sed "s/.*KIOSK_URL_VALUE=//")
+        if [[ -n "$CURRENT_URL" ]]; then
+            if [[ "$CURRENT_URL" == *"?"* ]]; then
+                NEW_URL="${CURRENT_URL}&BrowserID=${BROWSER_MOD_ID}"
+            else
+                NEW_URL="${CURRENT_URL}?BrowserID=${BROWSER_MOD_ID}"
+            fi
+            sed -i "s|^  KIOSK_URL_VALUE=.*|  KIOSK_URL_VALUE=$NEW_URL|" "$AUTOSTART_FILE"
+            sed -i "s|^URL=.*|URL=$NEW_URL|" "$INSTALL_MARKER"
+            log "BrowserID appended to kiosk URL: $NEW_URL"
+        fi
+    fi
 fi
 
 # ── 14. Bloat removal + apt cleanup ───────────────────────────────────────────────

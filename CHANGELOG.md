@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.10.0] — 2026-03-27
+
+### Changed
+
+- **No wrapper page required when using Trusted Networks** — if `HA_TOKEN` is empty and Trusted Networks handles auth, the script now skips the `kiosk-ha-login.html` wrapper entirely and appends `?BrowserID=` directly to the dashboard URL. Nothing to copy to the HA server, no manual steps.
+- **Standalone preloader eliminated** — the `kiosk-bmod-preloader.html` `file://` workaround is gone. `?BrowserID=` is appended directly to whatever URL the kiosk loads, whether that's the dashboard directly or the wrapper page.
+- **Install is now fully self-contained** — for a Trusted Networks setup with browser_mod, the complete post-install step is just `sudo reboot`. No file copying required.
+
+---
+
 ## [1.9.0] — 2026-03-27
 
 ### Changed
