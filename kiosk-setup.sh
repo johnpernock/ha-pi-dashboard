@@ -1552,7 +1552,13 @@ HA_WRAPPER_PATH="$KIOSK_HOME/kiosk-ha-login.html"
 # land in the correct origin scope. file:// and http:// are different origins —
 # a token written in file:// localStorage is invisible to HA at http://.
 # We copy the file to HA's www folder and load it via /local/.
-HA_WRAPPER_URL="$HA_URL/local/kiosk-ha-login.html"
+# BrowserID is appended as a URL parameter so ONE file serves ALL kiosks —
+# each Pi points to kiosk-ha-login.html?BrowserID=its-own-id.
+if [[ -n "$BROWSER_MOD_ID" && "$ENABLE_BROWSER_MOD" == "true" ]]; then
+    HA_WRAPPER_URL="$HA_URL/local/kiosk-ha-login.html?BrowserID=${BROWSER_MOD_ID}"
+else
+    HA_WRAPPER_URL="$HA_URL/local/kiosk-ha-login.html"
+fi
 
 _setup_ha_autologin() {
     # ── Method 1: print Trusted Networks YAML for user to add to HA ────────
@@ -1654,9 +1660,16 @@ _setup_ha_autologin() {
 
       // Set the browser_mod Browser ID via URL parameter — the official
       // browser_mod 2.x method (?BrowserID=name appended to any HA URL).
-      // This is more reliable than localStorage since it doesn't depend on
-      // origin timing or the correct localStorage key name.
-      var BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
+      //
+      // Dynamic: read BrowserID from THIS page's own URL first so one
+      // wrapper file serves all kiosks. Each Pi points to:
+      //   /local/kiosk-ha-login.html?BrowserID=kiosk-front-door
+      //   /local/kiosk-ha-login.html?BrowserID=kiosk-garage
+      // Fallback to the hardcoded value baked in at install time.
+      var FALLBACK_BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
+      var urlParams = new URLSearchParams(window.location.search);
+      var BROWSER_MOD_ID = urlParams.get('BrowserID') || FALLBACK_BROWSER_MOD_ID;
+
       var destination = HA_URL + HA_PATH;
       if (BROWSER_MOD_ID) {
         destination += (destination.indexOf('?') === -1 ? '?' : '&')
