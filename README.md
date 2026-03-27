@@ -1141,6 +1141,7 @@ Supports ReSpeaker 2-Mic HAT V2.0, ReSpeaker Lite (USB), generic USB mic, or any
 | [ha-pi-dashboard](https://github.com/johnpernock/ha-pi-dashboard) | This repo — kiosk OS setup, display API, browser_mod wiring |
 | [ha-lovelace-cards](https://github.com/johnpernock/ha-lovelace-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
 | [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
+| [ha-kiosk-automation](https://github.com/johnpernock/ha-kiosk-automation) | Kiosk display schedule — power off at night, on in morning |
 | [ha-voice-sattelite](https://github.com/johnpernock/ha-voice-sattelite) | Voice satellite installer — LVA + ReSpeaker, ESPHome protocol |
 
 ---
