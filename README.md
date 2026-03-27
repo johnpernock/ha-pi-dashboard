@@ -36,8 +36,8 @@ A zero-touch setup script for turning a Raspberry Pi into a wall-mounted display
 ## Quick Start
 
 ```bash
-git clone https://github.com/johnpernock/ha-pi-dashboard.git
-cd ha-pi-dashboard
+git clone https://github.com/johnpernock/ha-pi-smarthome.git
+cd ha-pi-smarthome
 chmod +x kiosk-setup.sh
 sudo bash kiosk-setup.sh https://your-dashboard.com
 sudo reboot
@@ -378,7 +378,7 @@ This is the recommended workflow when IP addresses or hostnames change after a n
 ## File Layout
 
 ```
-ha-pi-dashboard/
+ha-pi-smarthome/
 ├── kiosk-setup.sh
 └── README.md
 
@@ -795,8 +795,8 @@ Re-copy `~/kiosk-ha-login.html` to `/config/www/` on the HA server after updatin
 **Check 6 — HA IP changed:**
 Update `kiosk.conf` with the new IP and reset:
 ```bash
-nano ~/ha-pi-dashboard/kiosk.conf   # update HA_URL
-sudo bash ~/ha-pi-dashboard/kiosk-setup.sh --reset http://NEW_IP:8123/dashboard-wall/home
+nano ~/ha-pi-smarthome/kiosk.conf   # update HA_URL
+sudo bash ~/ha-pi-smarthome/kiosk-setup.sh --reset http://NEW_IP:8123/dashboard-wall/home
 sudo reboot
 ```
 
@@ -1118,7 +1118,7 @@ The `?BrowserID=` parameter is appended to each Pi's URL automatically so both r
 **Updating all displays at once:**
 ```bash
 for IP in 192.168.1.x 192.168.1.y; do
-  ssh johnpernock@$IP "cd ~/ha-pi-dashboard && git pull && sudo bash kiosk-setup.sh --update-url http://192.168.1.149:8123/dashboard-wall/home"
+  ssh johnpernock@$IP "cd ~/ha-pi-smarthome && git pull && sudo bash kiosk-setup.sh --update-url http://192.168.1.149:8123/dashboard-wall/home"
 done
 ```
 
@@ -1138,7 +1138,7 @@ Supports ReSpeaker 2-Mic HAT V2.0, ReSpeaker Lite (USB), generic USB mic, or any
 
 | Repo | Purpose |
 |---|---|
-| [ha-pi-dashboard](https://github.com/johnpernock/ha-pi-dashboard) | This repo — kiosk OS setup, display API, browser_mod wiring |
+| [ha-pi-smarthome](https://github.com/johnpernock/ha-pi-smarthome) | This repo — kiosk OS setup, display API, browser_mod wiring |
 | [ha-custom-cards](https://github.com/johnpernock/ha-custom-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
 | [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
 | [ha-kiosk-automation](https://github.com/johnpernock/ha-kiosk-automation) | Kiosk display schedule — power off at night, on in morning |
