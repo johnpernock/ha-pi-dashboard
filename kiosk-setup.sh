@@ -1974,6 +1974,38 @@ if $ENABLE_BROWSER_MOD; then
     echo "$BROWSER_MOD_ID" > /etc/kiosk-browser-mod-id
     chmod 644 /etc/kiosk-browser-mod-id
     log "Browser ID stored in /etc/kiosk-browser-mod-id"
+
+    # IMPORTANT: The wrapper page and autostart URL were written before this
+    # step resolved BROWSER_MOD_ID. Now that we have the final ID, update both.
+    #
+    # 1. Patch the BROWSER_MOD_ID variable in the wrapper page JS
+    if [[ -f "$HA_WRAPPER_PATH" ]]; then
+        sed -i "s|var BROWSER_MOD_ID = \".*\";|var BROWSER_MOD_ID = \"$BROWSER_MOD_ID\";|" "$HA_WRAPPER_PATH"
+        log "Wrapper page patched with resolved Browser ID: $BROWSER_MOD_ID"
+        # Re-copy the updated wrapper to HA www folder if it exists
+        for HA_CFG_DIR in /config /root/config /home/homeassistant/.homeassistant /usr/share/hassio/homeassistant; do
+            if [[ -f "$HA_CFG_DIR/www/kiosk-ha-login.html" ]]; then
+                cp "$HA_WRAPPER_PATH" "$HA_CFG_DIR/www/kiosk-ha-login.html" 2>/dev/null &&                     log "Updated wrapper page copied to $HA_CFG_DIR/www/kiosk-ha-login.html"
+                break
+            fi
+        done
+    fi
+
+    # 2. Append ?BrowserID= to the autostart URL so it is set even before
+    #    the wrapper page JS runs — belt and suspenders
+    if [[ -f "$AUTOSTART_FILE" ]]; then
+        CURRENT_URL=$(grep "KIOSK_URL_VALUE=" "$AUTOSTART_FILE" | head -1 | sed "s/.*KIOSK_URL_VALUE=//")
+        # Strip any existing BrowserID param then add the resolved one
+        CLEAN_URL=$(echo "$CURRENT_URL" | sed 's/?BrowserID=[^&]*//;s/&BrowserID=[^&]*//')
+        if [[ "$CLEAN_URL" == *"?"* ]]; then
+            NEW_URL="${CLEAN_URL}&BrowserID=${BROWSER_MOD_ID}"
+        else
+            NEW_URL="${CLEAN_URL}?BrowserID=${BROWSER_MOD_ID}"
+        fi
+        sed -i "s|KIOSK_URL_VALUE=.*|KIOSK_URL_VALUE=${NEW_URL}|" "$AUTOSTART_FILE"
+        sed -i "s|^URL=.*|URL=${NEW_URL}|" "$INSTALL_MARKER"
+        log "Autostart URL updated with BrowserID: $NEW_URL"
+    fi
     echo ""
     warn "browser_mod requires manual setup steps after reboot:"
     echo ""
