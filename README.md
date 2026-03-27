@@ -1124,6 +1124,58 @@ done
 
 ---
 
+## Voice Assistant (Optional)
+
+`voice-setup.sh` is a companion script that installs [OHF-Voice/linux-voice-assistant](https://github.com/OHF-Voice/linux-voice-assistant) as a systemd service. It connects to Home Assistant via the ESPHome protocol — HA auto-discovers it like any ESPHome device.
+
+Completely separate from the kiosk install. Can run on the same Pi as the kiosk or a dedicated Pi.
+
+### Supported hardware
+
+| Value | Hardware | Notes |
+|---|---|---|
+| `auto` | Auto-detect | Tries to identify what's connected |
+| `2mic_hat` | ReSpeaker 2-Mic Pi HAT V2.0 (GPIO) | Installs device tree overlay, requires reboot |
+| `respeaker_lite` | ReSpeaker Lite (USB) | Plug and play, best audio quality |
+| `usb` | Any USB mic/speaker | Generic USB audio device |
+| `custom` | Manual device names | Set `VOICE_MIC_DEVICE` and `VOICE_SPEAKER_DEVICE` |
+
+### Quick start
+
+```bash
+cp voice.conf.example voice.conf
+nano voice.conf   # set VOICE_SATELLITE_NAME and VOICE_HARDWARE
+sudo bash voice-setup.sh
+```
+
+### voice.conf example (two wall panels)
+
+```bash
+VOICE_SATELLITE_NAME="front-door-satellite"
+VOICE_HARDWARE="2mic_hat"       # or respeaker_lite, usb, auto
+VOICE_WAKE_WORD="okay_nabu"
+```
+
+After install, HA auto-discovers the satellite. Go to:
+**Settings → Devices & Services → ESPHome** — it should appear automatically.
+If not: Add Integration → ESPHome → enter the Pi's IP and port 6053.
+
+### Commands
+
+```bash
+sudo bash voice-setup.sh              # fresh install
+sudo bash voice-setup.sh --detect     # show audio devices
+sudo bash voice-setup.sh --status     # service status + recent logs
+sudo bash voice-setup.sh --update     # pull latest LVA, restart
+sudo bash voice-setup.sh --reset      # wipe and reinstall
+```
+
+### 2-Mic HAT V2.0 note
+
+The first run installs the device tree overlay driver and asks to reboot. After rebooting, run the script again — it detects the HAT is now present and finishes the install automatically. No kernel compilation required (unlike the old V1 driver approach).
+
+---
+
 ## Related Repositories
 
 | Repo | Purpose |

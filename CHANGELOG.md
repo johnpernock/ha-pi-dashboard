@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.12.0] — 2026-03-27
+
+### Added
+
+- **`voice-setup.sh`** — standalone voice assistant install script, separate from the kiosk install. Installs [OHF-Voice/linux-voice-assistant](https://github.com/OHF-Voice/linux-voice-assistant) as a systemd service that connects to Home Assistant via the ESPHome protocol.
+- **`voice.conf` / `voice.conf.example`** — same pattern as `kiosk.conf` — settings survive `git pull`, never edit the script directly.
+- **Multi-hardware support** — single script handles `2mic_hat` (ReSpeaker 2-Mic Pi HAT V2.0), `respeaker_lite` (USB), `usb` (generic), `custom` (manual device names), and `auto` (detection).
+- **2-Mic HAT V2.0 driver install** — device tree overlay approach (no kernel compilation), two-stage install (driver → reboot → LVA) with clear prompts at each step.
+- **`--detect` flag** — lists all audio devices with guidance on setting `VOICE_MIC_DEVICE` / `VOICE_SPEAKER_DEVICE`.
+- **`--status` flag** — shows systemd service status and last 30 log lines.
+- **`--update` flag** — pulls latest LVA and restarts the service without full reinstall.
+- **`--reset` flag** — wipes service, venv, and install marker for a clean reinstall.
+- **README: Voice Assistant section** — hardware table, quick start, two-stage HAT install note, all CLI flags documented.
+
+---
+
 ## [1.11.0] — 2026-03-27
 
 ### Documentation
