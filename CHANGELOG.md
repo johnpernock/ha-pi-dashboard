@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.13.0] — 2026-03-27
+
+### Added
+
+- **`--update` flag** — pulls latest script from git, sources `kiosk.conf`, and restarts Chromium via the existing watchdog. No full reinstall needed for routine updates.
+- **HA reachability watchdog** — background loop in the Wayland and X11 autostarts checks HA every 2 minutes. If HA is unreachable for 2 consecutive checks (~4 minutes), kills Chromium so the crash watchdog relaunches it fresh once HA comes back. Prevents kiosks getting stuck on error pages after an HA restart or network blip. Waits 60 seconds after boot before first check to allow Chromium to fully load.
+
+---
+
 ## [1.12.0] — 2026-03-27
 
 ### Added

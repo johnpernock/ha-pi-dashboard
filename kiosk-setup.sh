@@ -37,6 +37,9 @@
 #    Update the browser_mod Browser ID (no reinstall):
 #      sudo bash kiosk-setup.sh --set-browser-id kiosk-living-room
 #
+#    Pull latest script and restart Chromium (no full reinstall):
+#      sudo bash kiosk-setup.sh --update
+#
 #  NOTE: Flags must be run one at a time. They cannot be combined on one line.
 #    Correct:   sudo bash kiosk-setup.sh --factory-reset https://your-url.com
 #               sudo bash kiosk-setup.sh --set-token YOUR_TOKEN
@@ -513,6 +516,43 @@ fi
 # =============================================================================
 #  --update-url
 # =============================================================================
+# =============================================================================
+#  --update — pull latest script, rewrite autostart, restart Chromium
+# =============================================================================
+if [[ "$1" == "--update" ]]; then
+    [[ ! -f "$INSTALL_MARKER" ]] && err "Kiosk not installed. Run a full install first."
+
+    hr; banner "  Updating Kiosk"; hr; echo ""
+
+    # Pull latest from git
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -d "$SCRIPT_DIR/.git" ]]; then
+        log "Pulling latest from git..."
+        git -C "$SCRIPT_DIR" pull || warn "git pull failed — continuing with current version"
+    else
+        warn "Not a git repo — skipping git pull"
+    fi
+
+    # Source kiosk.conf to pick up any config changes
+    if [[ -f "$SCRIPT_DIR/kiosk.conf" ]]; then
+        source "$SCRIPT_DIR/kiosk.conf"
+        log "Loaded kiosk.conf"
+    fi
+
+    # Restart Chromium — watchdog picks it up automatically
+    log "Restarting Chromium..."
+    pkill chromium 2>/dev/null || true
+    sleep 2
+
+    info "Update complete"
+    echo ""
+    echo "  Chromium will relaunch automatically via the watchdog."
+    echo "  To apply config changes (new URL, browser_mod ID, etc.):"
+    echo "    sudo bash $0 --reset https://your-url"
+    echo ""
+    exit 0
+fi
+
 if [[ "$1" == "--update-url" ]]; then
     UPDATE_URL="${2:-}"
     [[ -z "$UPDATE_URL" ]]          && err "Usage: sudo bash $0 --update-url https://new-url.com"
@@ -1325,6 +1365,36 @@ echo "# Auto-reload every ${AUTO_RELOAD_SECONDS}s"
 echo "(while true; do sleep $AUTO_RELOAD_SECONDS; wtype -k F5 2>/dev/null; done) &"
 fi)
 
+# HA reachability watchdog — if HA goes down and comes back, Chromium is
+# stuck on an error page. This loop detects that and kills Chromium so
+# the crash watchdog below relaunches it fresh once HA is reachable again.
+(
+    MISS=0
+    sleep 60  # Give Chromium time to fully load before monitoring
+    while true; do
+        sleep 120
+        # Only check if Chromium is actually running
+        if ! pgrep -x chromium > /dev/null 2>&1; then
+            MISS=0; continue
+        fi
+        HA_BASE=$(echo "\$KIOSK_URL_VALUE" | grep -oP "https?://[^/]+")
+        if [[ -z "\$HA_BASE" ]]; then
+            MISS=0; continue
+        fi
+        if ! curl -s --max-time 5 "\$HA_BASE" > /dev/null 2>&1; then
+            MISS=\$((MISS + 1))
+            echo "[\$(date)] HA unreachable (miss \$MISS)" >> \$KIOSK_LOG
+            if [[ \$MISS -ge 2 ]]; then
+                echo "[\$(date)] HA still down after 2 checks — restarting Chromium" >> \$KIOSK_LOG
+                pkill -x chromium 2>/dev/null || true
+                MISS=0
+            fi
+        else
+            MISS=0
+        fi
+    done
+) &
+
 # Chromium crash watchdog — relaunches on any unexpected exit
 while true; do
     echo "[\$(date)] Launching Chromium \$KIOSK_URL_VALUE" >> \$KIOSK_LOG
@@ -1420,6 +1490,23 @@ $OSK_LINE
       && echo "[\$(date)] Network timeout" >> $KIOSK_HOME/kiosk.log \
       && break
   done
+  # HA reachability watchdog
+  (
+    MISS=0
+    sleep 60
+    while true; do
+      sleep 120
+      if ! pgrep -x chromium > /dev/null 2>&1; then MISS=0; continue; fi
+      HA_BASE=$(echo "\$KIOSK_URL" | grep -oP "https?://[^/]+")
+      [[ -z "\$HA_BASE" ]] && MISS=0 && continue
+      if ! curl -s --max-time 5 "\$HA_BASE" > /dev/null 2>&1; then
+        MISS=\$((MISS + 1))
+        [ \$MISS -ge 2 ] && pkill -x chromium 2>/dev/null && MISS=0
+      else
+        MISS=0
+      fi
+    done
+  ) &
   while true; do
     echo "[\$(date)] Launching Chromium \$KIOSK_URL" >> $KIOSK_HOME/kiosk.log
     ${CHROMIUM_PKG} $X11_CHROMIUM_FLAGS "\$KIOSK_URL"
