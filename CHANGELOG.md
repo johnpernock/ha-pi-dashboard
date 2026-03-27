@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.14.0] — 2026-03-27
+
+### Fixed
+
+- **DS3231 RTC — Pi 5 conflict handling** — `_install_ds3231_driver()` now adds `dtparam=rtc=disabled` under a `[pi5]` section in `/boot/firmware/config.txt`, disabling the Pi 5 built-in RTC at the firmware level so the DS3231 registers as `rtc0`. Udev rule retained as belt-and-suspenders backup.
+- **DS3231 RTC — hwclock-set masked** — `systemctl mask hwclock-set` added alongside `disable` to prevent accidental re-enablement that would override the hardware clock on boot.
+
+---
+
 ## [1.13.0] — 2026-03-27
 
 ### Added

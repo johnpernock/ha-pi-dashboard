@@ -354,6 +354,69 @@ fi
 AUTOSTART_FILE="$AUTOSTART_DIR/autostart"
 
 # =============================================================================
+#  DS3231 RTC DRIVER INSTALL
+# =============================================================================
+_install_ds3231_driver() {
+    info "Installing DS3231 RTC driver..."
+
+    # Enable I2C
+    if ! grep -q "^dtparam=i2c_arm=on" /boot/firmware/config.txt 2>/dev/null; then
+        echo "dtparam=i2c_arm=on" >> /boot/firmware/config.txt
+        log "Enabled I2C in config.txt"
+    fi
+
+    # Add DS3231 overlay — uses kernel rtc-ds1307 module which natively supports DS3231
+    if ! grep -q "dtoverlay=i2c-rtc,ds3231" /boot/firmware/config.txt 2>/dev/null; then
+        echo "dtoverlay=i2c-rtc,ds3231" >> /boot/firmware/config.txt
+        log "Added dtoverlay=i2c-rtc,ds3231 to config.txt"
+    else
+        log "DS3231 overlay already in config.txt"
+    fi
+
+    # Pi 5 has a built-in RTC that becomes rtc0, pushing DS3231 to rtc1
+    # This causes hwclock to use the wrong device. Fix: symlink rtc1→rtc0 or
+    # disable the built-in RTC via udev rule so DS3231 is always rtc0
+    if $HAS_BUILTIN_RTC; then
+        warn "Pi 5 detected — disabling built-in RTC so DS3231 is primary (rtc0)"
+        # Add [pi5] section to config.txt to disable the built-in RTC
+        local CFG="/boot/firmware/config.txt"
+        if ! grep -q "dtparam=rtc=disabled" "\$CFG" 2>/dev/null; then
+            # Add under [pi5] section if it exists, otherwise create it
+            if grep -q "^\[pi5\]" "\$CFG"; then
+                sed -i '/^\[pi5\]/a dtparam=rtc=disabled' "\$CFG"
+            else
+                printf '\n[pi5]\ndtparam=rtc=disabled\n[all]\n' >> "\$CFG"
+            fi
+            log "Pi 5: added dtparam=rtc=disabled to config.txt — DS3231 will be rtc0"
+        else
+            log "Pi 5: dtparam=rtc=disabled already in config.txt"
+        fi
+        # Also add udev rule as belt-and-suspenders
+        cat > /etc/udev/rules.d/85-rtc.rules << 'UDEVEOF'
+# Prefer external DS3231 as primary RTC over Pi 5 built-in
+SUBSYSTEM=="rtc", ATTR{name}=="rtc-ds1307", SYMLINK+="rtc", OPTIONS+="link_priority=10"
+UDEVEOF
+        log "udev rule written: /etc/udev/rules.d/85-rtc.rules"
+        info "Pi 5: after reboot verify with: ls -la /dev/rtc* && hwclock -r"
+    fi
+
+    # Remove fake-hwclock — it saves and restores the system clock from a file
+    # and will override the real RTC time on boot if left installed
+    if dpkg -l fake-hwclock &>/dev/null 2>&1; then
+        apt-get remove -y fake-hwclock 2>/dev/null || true
+        update-rc.d -f fake-hwclock remove 2>/dev/null || true
+        log "Removed fake-hwclock (would override real RTC on boot)"
+    fi
+
+    # Mask hwclock-set systemd service to prevent it interfering
+    # Mask hwclock-set so it can't be accidentally re-enabled
+    systemctl disable hwclock-set 2>/dev/null || true
+    systemctl mask    hwclock-set 2>/dev/null || true
+
+    info "DS3231 driver configured — reboot required to activate"
+}
+
+# =============================================================================
 #  RTC DETECTION
 # =============================================================================
 detect_rtc() {
@@ -484,12 +547,21 @@ if [[ "$1" == "--enable-rtc" ]]; then
             echo "    2. Run:  sudo hwclock --systohc"
             echo "    3. Reboot, then re-run this command"
         else
-            echo "  External RTC checklist (e.g. DS3231):"
+            echo "  External RTC checklist (DS3231):"
             echo "    1. Check wiring: SDA→GPIO2, SCL→GPIO3, VCC→3.3V, GND→GND"
-            echo "    2. Ensure /boot/firmware/config.txt contains:"
-            echo "         dtoverlay=i2c-rtc,ds3231"
-            echo "    3. Reboot, then run:  sudo hwclock --systohc"
-            echo "    4. Re-run:  sudo bash $0 --enable-rtc"
+            echo ""
+            echo "  Would you like to auto-configure the DS3231 driver now?"
+            read -r -p "    Install DS3231 driver? [Y/n] " _rtc_ans
+            if [[ "${_rtc_ans,,}" != "n" ]]; then
+                _install_ds3231_driver
+                echo ""
+                echo "  Reboot required — after reboot run:"
+                echo "    sudo hwclock --systohc"
+                echo "    sudo bash $0 --enable-rtc"
+                echo ""
+                read -r -p "  Reboot now? [Y/n] " _rb_ans
+                [[ "${_rb_ans,,}" != "n" ]] && reboot
+            fi
         fi
         echo ""
         exit 1
