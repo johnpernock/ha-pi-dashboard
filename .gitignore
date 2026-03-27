@@ -25,5 +25,3 @@ temp/
 # Local config overrides — never commit personal settings
 kiosk.conf
 
-# Voice assistant local config
-voice.conf
