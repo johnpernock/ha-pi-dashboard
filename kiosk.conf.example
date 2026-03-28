@@ -33,6 +33,9 @@
 # ── Display API (hardware brightness control) ─────────────────────────────────
 # ENABLE_DISPLAY_API=true
 # DISPLAY_API_PORT=2701
+# Bind address: 0.0.0.0 = all interfaces (default), 127.0.0.1 = localhost only.
+# Use 0.0.0.0 when HA runs on a separate machine (most setups).
+# DISPLAY_API_BIND=0.0.0.0
 
 # ── Waveshare 10.1DP-CAPLCD display ──────────────────────────────────────────
 # WAVESHARE_10DP=true

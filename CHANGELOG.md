@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.17.0] — 2026-03-28
+
+### Security hardening — display API + setup script
+
+**`kiosk-display-api.py`:**
+- Added `BIND_ADDRESS` config option (default `0.0.0.0`). Set `DISPLAY_API_BIND=127.0.0.1` in `kiosk.conf` to restrict API to localhost if HA runs on the same host.
+- Added simple rate limiter on POST endpoints — max 20 calls per 10s per client IP. Prevents rapid-fire ddcutil spam. Returns HTTP 429 when exceeded.
+- `bind_address` is now written to `/etc/kiosk-display.conf` by the setup script.
+
+**`kiosk-setup.sh`:**
+- Wrapper page (`kiosk-ha-login.html`) now `chmod 600` after creation. It contains the HA long-lived access token — previously was readable by any local user.
+- Log file (`/var/log/kiosk-display.log`) now created with `640 root adm` permissions via logrotate — prevents world-readable API logs.
+- Added `DISPLAY_API_BIND=0.0.0.0` default with documentation.
+
+**`kiosk.conf.example`:**
+- Added `DISPLAY_API_BIND` option with documentation.
+
+---
+
 ## [1.16.0] — 2026-03-28
 
 ### Added

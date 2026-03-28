@@ -90,6 +90,10 @@ REMOVE_BLOAT=true
 # See ha-display-config.yaml for the matching HA configuration.
 ENABLE_DISPLAY_API=false
 DISPLAY_API_PORT=2701
+# Bind address for the display API (default: 0.0.0.0 = all interfaces).
+# Set to 127.0.0.1 to restrict to localhost only — HA must be on the same host.
+# For most setups 0.0.0.0 is correct since HA runs on a separate machine.
+DISPLAY_API_BIND=0.0.0.0
 
 # Enable browser_mod (HACS) compatibility.
 # browser_mod registers Chromium as a HA device, enabling popups, navigation,
@@ -1869,7 +1873,8 @@ _setup_ha_autologin() {
 </html>
 HTMLEOF
         chown "$KIOSK_USER:$KIOSK_USER" "$HA_WRAPPER_PATH"
-        log "Token wrapper page created: $HA_WRAPPER_PATH"
+        chmod 600 "$HA_WRAPPER_PATH"   # token inside — readable by owner only
+        log "Token wrapper page created: $HA_WRAPPER_PATH (chmod 600)"
 
         # IMPORTANT: The wrapper page MUST be served from the HA origin.
         # localStorage is origin-scoped — a token written at file:// is
@@ -2042,6 +2047,7 @@ _install_display_api() {
     cat > /etc/kiosk-display.conf << DISPLAYCONF
 [display]
 port             = $DISPLAY_API_PORT
+bind_address     = $DISPLAY_API_BIND
 compositor       = $COMPOSITOR
 output           = $DISPLAY_OUTPUT
 wayland_socket   = /run/user/$(id -u "$KIOSK_USER")/wayland-0
@@ -2088,6 +2094,7 @@ SVCEOF
     compress
     missingok
     notifempty
+    create 640 root adm
 }
 EOF
 

@@ -49,6 +49,7 @@ config = configparser.ConfigParser()
 config.read(CONFIG_FILE)
 
 PORT          = int(config.get("display", "port",            fallback="2701"))
+BIND_ADDRESS  = config.get("display", "bind_address",        fallback="0.0.0.0")
 COMPOSITOR    = config.get("display", "compositor",          fallback="x11")
 DISPLAY_OUT   = config.get("display", "output",              fallback="HDMI-A-1")
 WAYLAND_SOCK  = config.get("display", "wayland_socket",      fallback="/run/user/1000/wayland-0")
@@ -491,6 +492,29 @@ if ENABLE_TOUCH_TO_WAKE:
 # =============================================================================
 #  HTTP request handler
 # =============================================================================
+# =============================================================================
+#  Simple rate limiter — prevents rapid-fire POST spam to ddcutil
+#  Max RATE_LIMIT_MAX calls per RATE_LIMIT_WINDOW_S seconds per client IP.
+# =============================================================================
+import collections
+_rate_buckets: dict = collections.defaultdict(list)
+_rate_lock = threading.Lock()
+RATE_LIMIT_MAX      = 20          # max calls per window
+RATE_LIMIT_WINDOW_S = 10.0        # rolling window in seconds
+
+def _rate_check(ip: str) -> bool:
+    """Return True if the request is allowed, False if rate-limited."""
+    now = time.monotonic()
+    with _rate_lock:
+        bucket = _rate_buckets[ip]
+        # Evict entries outside the window
+        _rate_buckets[ip] = [t for t in bucket if now - t < RATE_LIMIT_WINDOW_S]
+        if len(_rate_buckets[ip]) >= RATE_LIMIT_MAX:
+            return False
+        _rate_buckets[ip].append(now)
+        return True
+
+
 class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -537,6 +561,13 @@ class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(f"Unknown endpoint: {path}", 404)
 
     def do_POST(self):
+        # Rate limit — prevent rapid ddcutil spam
+        client_ip = self.client_address[0]
+        if not _rate_check(client_ip):
+            log.warning(f"Rate limit exceeded for {client_ip}")
+            self._send_error("Rate limit exceeded — slow down", 429)
+            return
+
         parsed = urllib.parse.urlparse(self.path)
         path   = parsed.path.rstrip("/")
         params = urllib.parse.parse_qs(parsed.query)
@@ -594,8 +625,8 @@ if __name__ == "__main__":
     log.info(f"Compositor: {COMPOSITOR} | Output: {DISPLAY_OUT}")
     log.info(f"Touch-to-wake: {'enabled' if ENABLE_TOUCH_TO_WAKE else 'disabled'}")
 
-    server = http.server.HTTPServer(("0.0.0.0", PORT), KioskDisplayHandler)
-    log.info(f"Listening on http://0.0.0.0:{PORT}")
+    server = http.server.HTTPServer((BIND_ADDRESS, PORT), KioskDisplayHandler)
+    log.info(f"Listening on http://{BIND_ADDRESS}:{PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
