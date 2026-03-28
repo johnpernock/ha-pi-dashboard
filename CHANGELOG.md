@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.15.0] — 2026-03-27
+
+### Added
+
+- **Pull-to-refresh** — enabled on both Wayland and X11 kiosk profiles:
+  - Added `--pull-to-refresh=1` Chromium flag
+  - Removed `--disable-pinch` flag which was blocking the swipe gesture
+  - Swipe down from the top of the screen to reload the dashboard
+
+---
+
 ## [1.14.0] — 2026-03-27
 
 ### Fixed

@@ -1393,10 +1393,10 @@ EOF
     _CHROME_FLAGS+=" --disable-sync"
     _CHROME_FLAGS+=" --disable-background-networking"
     _CHROME_FLAGS+=" --check-for-update-interval=31536000"
-    _CHROME_FLAGS+=" --disable-pinch"
     _CHROME_FLAGS+=" --touch-events=enabled"
     _CHROME_FLAGS+=" --disable-features=TouchpadOverscrollHistoryNavigation"
     _CHROME_FLAGS+=" --overscroll-history-navigation=0"
+    _CHROME_FLAGS+=" --pull-to-refresh=1"
     _CHROME_FLAGS+=" --hide-scrollbars"
     _CHROME_FLAGS+=" --autoplay-policy=no-user-gesture-required"
     CHROMIUM_CMD="chromium $_CHROME_FLAGS"
@@ -1526,8 +1526,8 @@ EOF
     _X11_FLAGS+=" --disable-session-crashed-bubble"
     ! $ENABLE_BROWSER_MOD && _X11_FLAGS+=" --disable-restore-session-state"
     _X11_FLAGS+=" --disable-save-password-bubble --disable-sync --disable-background-networking"
-    _X11_FLAGS+=" --check-for-update-interval=31536000 --disable-pinch --touch-events=enabled"
-    _X11_FLAGS+=" --overscroll-history-navigation=0 --hide-scrollbars --autoplay-policy=no-user-gesture-required"
+    _X11_FLAGS+=" --check-for-update-interval=31536000 --touch-events=enabled"
+    _X11_FLAGS+=" --overscroll-history-navigation=0 --pull-to-refresh=1 --hide-scrollbars --autoplay-policy=no-user-gesture-required"
     X11_CHROMIUM_FLAGS="$_X11_FLAGS"
 
     cat > "$AUTOSTART_FILE" << AUTOSTART
