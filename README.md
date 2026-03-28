@@ -138,6 +138,7 @@ If no `kiosk.conf` exists the script runs entirely from its built-in defaults, s
 | `ENABLE_BROWSER_MOD` | `false` | Enable browser_mod compatibility (persistent Chromium profile, removes `--incognito`) |
 | `BROWSER_MOD_ID` | `""` | browser_mod Browser ID pre-seeded into localStorage. Use a descriptive name like `kiosk-living-room`. Auto-generates from Pi serial if blank. |
 | `WAVESHARE_10DP` | `false` | Auto-configure resolution and DDC/CI for the Waveshare 10.1DP-CAPLCD display |
+| `ENABLE_PULL_TO_REFRESH` | `true` | Pull-down-to-refresh touch gesture in Chromium. Set `false` on wall-mounted displays to prevent accidental page reloads |
 
 ---
 

@@ -37,6 +37,11 @@
 # ── Waveshare 10.1DP-CAPLCD display ──────────────────────────────────────────
 # WAVESHARE_10DP=true
 
+# Pull-to-refresh gesture (default: true — enabled)
+# Set to false to disable the pull-down-to-refresh touch gesture.
+# Recommended: false for wall-mounted kiosks to prevent accidental reloads.
+# ENABLE_PULL_TO_REFRESH=false
+
 # ── Scheduled shutdown/wake (requires RTC hardware) ──────────────────────────
 # SHUTDOWN_HOUR=23
 # SHUTDOWN_MINUTE=0

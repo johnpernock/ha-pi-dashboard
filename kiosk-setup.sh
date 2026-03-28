@@ -112,6 +112,12 @@ BROWSER_MOD_ID=""
 # and confirms that DDC/CI brightness control via ddcutil is the correct method.
 WAVESHARE_10DP=false
 
+# Pull-to-refresh gesture in Chromium.
+# When true, pulling down on a touchscreen refreshes the page — useful for
+# manually reloading the dashboard. When false, the gesture is disabled,
+# preventing accidental refreshes on wall-mounted displays.
+ENABLE_PULL_TO_REFRESH=true
+
 # =============================================================================
 #  HOME ASSISTANT AUTO-LOGIN (optional)
 # =============================================================================
@@ -1396,7 +1402,7 @@ EOF
     _CHROME_FLAGS+=" --touch-events=enabled"
     _CHROME_FLAGS+=" --disable-features=TouchpadOverscrollHistoryNavigation"
     _CHROME_FLAGS+=" --overscroll-history-navigation=0"
-    _CHROME_FLAGS+=" --pull-to-refresh=1"
+    $ENABLE_PULL_TO_REFRESH && _CHROME_FLAGS+=" --pull-to-refresh=1" || _CHROME_FLAGS+=" --pull-to-refresh=0"
     _CHROME_FLAGS+=" --hide-scrollbars"
     _CHROME_FLAGS+=" --autoplay-policy=no-user-gesture-required"
     CHROMIUM_CMD="chromium $_CHROME_FLAGS"
@@ -1527,7 +1533,9 @@ EOF
     ! $ENABLE_BROWSER_MOD && _X11_FLAGS+=" --disable-restore-session-state"
     _X11_FLAGS+=" --disable-save-password-bubble --disable-sync --disable-background-networking"
     _X11_FLAGS+=" --check-for-update-interval=31536000 --touch-events=enabled"
-    _X11_FLAGS+=" --overscroll-history-navigation=0 --pull-to-refresh=1 --hide-scrollbars --autoplay-policy=no-user-gesture-required"
+    _X11_FLAGS+=" --overscroll-history-navigation=0"
+    $ENABLE_PULL_TO_REFRESH && _X11_FLAGS+=" --pull-to-refresh=1" || _X11_FLAGS+=" --pull-to-refresh=0"
+    _X11_FLAGS+=" --hide-scrollbars --autoplay-policy=no-user-gesture-required"
     X11_CHROMIUM_FLAGS="$_X11_FLAGS"
 
     cat > "$AUTOSTART_FILE" << AUTOSTART

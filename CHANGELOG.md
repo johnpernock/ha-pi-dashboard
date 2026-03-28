@@ -15,6 +15,14 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.15.0] — 2026-03-27
+
+### Added
+
+- **`ENABLE_PULL_TO_REFRESH`** config option (default: `true`) — controls the Chromium `--pull-to-refresh` flag in both Wayland and X11 launch modes. Set to `false` in `kiosk.conf` to disable the pull-down-to-refresh touch gesture on wall-mounted displays and prevent accidental page reloads. Takes effect on next `--update` run.
+
+---
+
 ## [1.14.0] — 2026-03-27
 
 ### Fixed
