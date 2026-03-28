@@ -4,6 +4,53 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.16.0] — 2026-03-28
+
+### Added
+
+**Touch-to-wake** — tap the screen to turn it back on when the backlight is off, with zero risk of accidentally triggering the dashboard.
+
+**Why it's better than a browser extension:**
+The implementation uses kernel-level `evdev` input grabbing via Python's `evdev` library. When the screen turns off, the API calls `device.grab()` — the kernel routes all touchscreen events exclusively to our process. Chromium receives literally zero input events while the screen is dark. This eliminates the race condition inherent in any JavaScript-based approach and prevents accidental dashboard triggers entirely.
+
+**New config options (`kiosk.conf`):**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ENABLE_TOUCH_TO_WAKE` | `false` | Enable touch-to-wake (requires `ENABLE_DISPLAY_API=true`) |
+| `TOUCH_WAKE_BRIGHTNESS` | `last` | Brightness on wake: `last` restores pre-off level, or `1`–`100` for fixed |
+| `TOUCH_WAKE_SWALLOW_MS` | `300` | ms to absorb touch events after waking (covers slow lift-offs) |
+
+**New API endpoints:**
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /screen/state` | `{"screen":"on"\|"off","touch_grab":bool}` — real-time screen state |
+
+`POST /screen/off` response now includes `touch_grab: true` when grab is active.
+`GET /status` response now includes `screen` and `touch_wake` fields.
+
+**`kiosk-display-api.py` changes:**
+- New `TouchWakeMonitor` class — background daemon thread, evdev grab, drain loop
+- `DisplayBackend.screen_off()` — grabs input BEFORE cutting backlight (no race window)
+- `DisplayBackend.screen_on()` — releases grab if held (supports HA-triggered wakes)
+- `DisplayBackend.screen_on_internal()` — hardware-only on, called by `TouchWakeMonitor._do_wake()`
+- `DisplayBackend._pre_off_brightness` — stores brightness before screen-off for `last` mode
+- `DisplayBackend._screen_off` — tracks current screen state
+- `ENABLE_TOUCH_TO_WAKE`, `TOUCH_WAKE_BRIGHTNESS`, `TOUCH_WAKE_SWALLOW_MS` read from `/etc/kiosk-display.conf`
+
+**`kiosk-setup.sh` changes:**
+- Three new config defaults (see table above)
+- Writes touch-to-wake settings to `/etc/kiosk-display.conf`
+- Installs `python3-evdev` via apt (falls back to pip) when `ENABLE_TOUCH_TO_WAKE=true`
+
+**`ha-display-config.yaml` changes:**
+- New `sensor.kiosk_screen_state` REST sensor polling `/screen/state` every 30s
+- `switch.kiosk_screen` now uses the real state sensor instead of optimistic tracking
+- `sensor.kiosk_display_status` now exposes `screen` and `touch_wake` attributes
+
+---
+
 ## [1.15.0] — 2026-03-27
 
 ### Added

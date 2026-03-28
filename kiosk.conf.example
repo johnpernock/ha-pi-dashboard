@@ -42,6 +42,23 @@
 # Recommended: false for wall-mounted kiosks to prevent accidental reloads.
 # ENABLE_PULL_TO_REFRESH=false
 
+# ── Touch-to-wake ──────────────────────────────────────────────────────────────
+# Wake the screen when someone taps while the backlight is off.
+# Uses kernel-level evdev input grab — Chromium receives ZERO touch events
+# while the screen is dark, so no accidental dashboard triggers.
+# Requires: ENABLE_DISPLAY_API=true  and  python3-evdev installed.
+# ENABLE_TOUCH_TO_WAKE=true
+
+# Brightness to restore when the screen wakes from a touch:
+#   last  — restore the brightness level set before screen-off (recommended)
+#   1-100 — always wake to this specific brightness
+# TOUCH_WAKE_BRIGHTNESS=last
+
+# Extra milliseconds to absorb touch events after waking (default: 300).
+# The wake tap itself is always swallowed. This covers slow lift-offs or
+# multi-finger gestures. Set to 0 to disable the extra swallow window.
+# TOUCH_WAKE_SWALLOW_MS=300
+
 # ── Scheduled shutdown/wake (requires RTC hardware) ──────────────────────────
 # SHUTDOWN_HOUR=23
 # SHUTDOWN_MINUTE=0

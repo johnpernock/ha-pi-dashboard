@@ -54,9 +54,22 @@ sensor:
     value_template: "{{ value_json.backend }}"
     json_attributes:
       - brightness
+      - screen
       - compositor
       - output
+      - touch_wake
     scan_interval: 60
+
+  # Screen state — "on" or "off" (updated every 30s, or use switch tracking)
+  # touch_grab attribute is true while the evdev input grab is active
+  - platform: rest
+    name: Kiosk Screen State
+    unique_id: kiosk_screen_state
+    resource: "http://KIOSK_IP:KIOSK_PORT/screen/state"
+    value_template: "{{ value_json.screen }}"
+    json_attributes:
+      - touch_grab
+    scan_interval: 30
 
   - platform: rest
     name: Kiosk API Health
@@ -113,9 +126,14 @@ switch:
           {% else %}
             mdi:monitor-off
           {% endif %}
-        # HA has no reliable way to know if the screen is on/off without a
-        # dedicated sensor, so this switch tracks its own state optimistically.
-        value_template: "{{ is_state('switch.kiosk_screen', 'on') }}"
+        # Uses the real screen state from the API sensor (updated every 30s).
+        # Falls back to optimistic tracking if the sensor isn't configured.
+        value_template: >
+          {% if states('sensor.kiosk_screen_state') in ['on', 'off'] %}
+            {{ states('sensor.kiosk_screen_state') == 'on' }}
+          {% else %}
+            {{ is_state('switch.kiosk_screen', 'on') }}
+          {% endif %}"
         turn_on:
           service: rest_command.kiosk_screen_on
         turn_off:

@@ -9,10 +9,15 @@ Endpoints:
   POST /brightness      → JSON body {"value": 75}  or query ?value=75
   POST /screen/off      → turn backlight/display off (Pi stays fully on)
   POST /screen/on       → turn backlight/display back on
+  GET  /screen/state    → {"screen": "on"|"off"}
   GET  /health          → {"status": "ok", "uptime": N}
 
-Home Assistant integration:
-  See ha-display-config.yaml in the same repo for ready-to-use HA config.
+Touch-to-wake (ENABLE_TOUCH_TO_WAKE=true in kiosk.conf):
+  When the screen is turned off, the touchscreen input device is grabbed at
+  the kernel level via evdev. Chromium receives zero touch events while the
+  screen is dark, preventing accidental dashboard triggers. The first tap
+  releases the grab, wakes the backlight, and restores brightness. All
+  subsequent events reach Chromium normally.
 
 Display type auto-detection priority:
   1. DSI backlight  — /sys/class/backlight/* (official Pi touchscreen, some HDMI)
@@ -23,10 +28,12 @@ Display type auto-detection priority:
 import http.server
 import json
 import os
+import select
 import subprocess
 import sys
 import glob
 import time
+import threading
 import logging
 import configparser
 import urllib.parse
@@ -41,13 +48,19 @@ LOG_FILE    = "/var/log/kiosk-display.log"
 config = configparser.ConfigParser()
 config.read(CONFIG_FILE)
 
-PORT          = int(config.get("display", "port",        fallback="2701"))
-COMPOSITOR    = config.get("display", "compositor",      fallback="x11")
-DISPLAY_OUT   = config.get("display", "output",          fallback="HDMI-A-1")
-WAYLAND_SOCK  = config.get("display", "wayland_socket",  fallback="/run/user/1000/wayland-0")
-X_DISPLAY     = config.get("display", "x_display",       fallback=":0")
-KIOSK_USER    = config.get("display", "kiosk_user",      fallback="pi")
-KIOSK_UID     = int(config.get("display", "kiosk_uid",   fallback="1000"))
+PORT          = int(config.get("display", "port",            fallback="2701"))
+COMPOSITOR    = config.get("display", "compositor",          fallback="x11")
+DISPLAY_OUT   = config.get("display", "output",              fallback="HDMI-A-1")
+WAYLAND_SOCK  = config.get("display", "wayland_socket",      fallback="/run/user/1000/wayland-0")
+X_DISPLAY     = config.get("display", "x_display",           fallback=":0")
+KIOSK_USER    = config.get("display", "kiosk_user",          fallback="pi")
+KIOSK_UID     = int(config.get("display", "kiosk_uid",       fallback="1000"))
+
+# Touch-to-wake configuration
+ENABLE_TOUCH_TO_WAKE    = config.getboolean("display", "touch_to_wake",   fallback=False)
+_wake_bri_raw           = config.get("display", "wake_brightness",        fallback="last").strip()
+TOUCH_WAKE_BRIGHTNESS   = _wake_bri_raw if _wake_bri_raw == "last" else int(_wake_bri_raw)
+TOUCH_WAKE_SWALLOW_MS   = int(config.get("display", "wake_swallow_ms",    fallback="300"))
 
 START_TIME = time.time()
 
@@ -65,15 +78,200 @@ logging.basicConfig(
 log = logging.getLogger("kiosk-display")
 
 # =============================================================================
+#  Touch-to-wake monitor
+#
+#  Uses evdev to hold an exclusive kernel-level grab on the touchscreen while
+#  the display is off. This is OS-level input blocking — Chromium receives
+#  literally zero events. No race conditions, no JavaScript required.
+#
+#  Flow:
+#    screen_off() → grab touchscreen → DDC off
+#    user taps    → our thread reads the event (Chromium sees nothing)
+#                 → drain remaining events for SWALLOW_MS
+#                 → ungrab → restore brightness → screen on
+#    screen_on()  → ungrab (if grabbed) → DDC on
+# =============================================================================
+class TouchWakeMonitor:
+    """Kernel-level touch grab for wake-on-touch with accidental-tap prevention."""
+
+    def __init__(self, wake_brightness, swallow_ms):
+        self._wake_brightness = wake_brightness  # int or 'last'
+        self._swallow_ms      = swallow_ms / 1000.0
+        self._device          = None
+        self._grabbed         = False
+        self._lock            = threading.Lock()
+        self._wake_event      = threading.Event()  # signals monitor thread to wake
+        self._stop            = False
+        self._display         = None               # set after DisplayBackend created
+
+        self._find_device()
+
+        if self._device:
+            self._thread = threading.Thread(
+                target=self._monitor_loop,
+                name="touch-wake-monitor",
+                daemon=True,
+            )
+            self._thread.start()
+            log.info(
+                f"Touch-to-wake monitor started — device: {self._device.name} "
+                f"({self._device.path}), brightness: {wake_brightness}, "
+                f"swallow: {swallow_ms}ms"
+            )
+
+    def _find_device(self):
+        """Locate the touchscreen input device by name at startup."""
+        try:
+            from evdev import InputDevice, list_devices
+        except ImportError:
+            log.error(
+                "evdev not installed — touch-to-wake disabled. "
+                "Run: pip install evdev --break-system-packages"
+            )
+            return
+
+        keywords = ["touch", "waveshare", "ili", "ft5", "goodix", "elan",
+                    "hid", "xinput", "sitronix"]
+        for path in list_devices():
+            try:
+                dev = InputDevice(path)
+                if any(k in dev.name.lower() for k in keywords):
+                    self._device = dev
+                    return
+            except Exception:
+                pass
+
+        log.warning(
+            "Touch-to-wake: no touchscreen input device found. "
+            "Check 'evtest' to identify the correct device and set "
+            "touch_device in /etc/kiosk-display.conf if needed."
+        )
+
+    @property
+    def is_grabbed(self) -> bool:
+        return self._grabbed
+
+    def grab(self):
+        """
+        Called by screen_off() BEFORE turning the display off.
+        Grabs the device exclusively — Chromium stops receiving all input.
+        """
+        if not self._device:
+            return
+        with self._lock:
+            if self._grabbed:
+                return
+            try:
+                self._device.grab()
+                self._grabbed = True
+                log.info("Touch-to-wake: input grab active — Chromium input blocked")
+            except Exception as e:
+                log.warning(f"Touch-to-wake: grab failed ({e}) — touch events may leak")
+
+    def ungrab(self):
+        """
+        Called when screen wakes. Releases the grab so Chromium gets input again.
+        Always safe to call even if not currently grabbed.
+        """
+        if not self._device:
+            return
+        with self._lock:
+            if not self._grabbed:
+                return
+            try:
+                self._device.ungrab()
+                self._grabbed = False
+                log.info("Touch-to-wake: input grab released — Chromium input restored")
+            except Exception as e:
+                log.warning(f"Touch-to-wake: ungrab failed ({e})")
+
+    def _drain_events(self):
+        """
+        Consume all events queued in our fd for SWALLOW_MS.
+        These are events that arrived while grabbed — they can never reach
+        Chromium since we already own the fd. Draining prevents them from
+        being processed if the fd somehow gets re-inherited.
+        """
+        deadline = time.monotonic() + self._swallow_ms
+        while time.monotonic() < deadline:
+            remaining = max(0.001, deadline - time.monotonic())
+            try:
+                r, _, _ = select.select([self._device.fd], [], [], remaining)
+                if r:
+                    self._device.read()
+            except Exception:
+                break
+
+    def _do_wake(self):
+        """
+        Perform the full wake sequence — screen on, brightness restore,
+        drain swallow window, then ungrab.
+        """
+        if not self._display:
+            return
+
+        # Restore brightness first (this is what the user wants to see)
+        bri = (
+            self._display._pre_off_brightness
+            if self._wake_brightness == "last"
+            else self._wake_brightness
+        )
+        # Clamp to valid range
+        bri = max(1, min(100, bri if bri else 80))
+
+        log.info(f"Touch-to-wake: waking screen, brightness → {bri}%")
+        self._display.screen_on_internal()   # turn display on (DDC/backlight)
+        self._display.set_brightness(bri)    # restore brightness
+
+        # Drain any queued events during swallow window before releasing grab
+        self._drain_events()
+        self.ungrab()
+
+    def _monitor_loop(self):
+        """
+        Background daemon thread.
+        Blocks on device.read_loop() — wakes only when the grab is active
+        and a touch event arrives.
+        """
+        from evdev import ecodes
+
+        while not self._stop:
+            # Wait until grabbed
+            if not self._grabbed:
+                time.sleep(0.05)
+                continue
+
+            try:
+                for event in self._device.read_loop():
+                    if not self._grabbed:
+                        break
+                    # Any absolute (touch coordinates) or key event = touch
+                    if event.type in (ecodes.EV_ABS, ecodes.EV_KEY):
+                        log.info("Touch-to-wake: touch detected while screen off")
+                        self._do_wake()
+                        break
+            except Exception as e:
+                if self._grabbed:
+                    log.error(f"Touch-to-wake monitor error: {e}")
+                time.sleep(0.5)
+
+    def stop(self):
+        self._stop = True
+        self.ungrab()
+
+
+# =============================================================================
 #  Display backend detection
 # =============================================================================
 class DisplayBackend:
     """Abstract display control — auto-selects the right backend at startup."""
 
     def __init__(self):
-        self.type = "none"
-        self.backlight_path = None
-        self.ddc_display_id = None
+        self.type               = "none"
+        self.backlight_path     = None
+        self.ddc_display_id     = None
+        self._screen_off        = False       # track screen state
+        self._pre_off_brightness = 80         # brightness before last screen-off
         self._detect()
 
     def _detect(self):
@@ -109,8 +307,8 @@ class DisplayBackend:
         """Return current brightness as 0-100."""
         try:
             if self.type == "backlight":
-                actual   = int(Path(f"{self.backlight_path}/brightness").read_text().strip())
-                max_val  = int(Path(f"{self.backlight_path}/max_brightness").read_text().strip())
+                actual  = int(Path(f"{self.backlight_path}/brightness").read_text().strip())
+                max_val = int(Path(f"{self.backlight_path}/max_brightness").read_text().strip())
                 return round((actual / max_val) * 100)
 
             if self.type == "ddc":
@@ -161,7 +359,8 @@ class DisplayBackend:
             env["DISPLAY"] = X_DISPLAY
         try:
             subprocess.run(
-                ["sudo", "-u", KIOSK_USER, "--preserve-env=WAYLAND_DISPLAY,XDG_RUNTIME_DIR,DISPLAY"] + cmd,
+                ["sudo", "-u", KIOSK_USER,
+                 "--preserve-env=WAYLAND_DISPLAY,XDG_RUNTIME_DIR,DISPLAY"] + cmd,
                 env=env, check=True, timeout=10
             )
             return True
@@ -170,10 +369,34 @@ class DisplayBackend:
             return False
 
     def screen_off(self) -> bool:
-        """Turn the display off without shutting down the Pi."""
+        """
+        Turn the display off without shutting down the Pi.
+        Grabs the touchscreen BEFORE cutting the backlight so there is
+        zero window where a tap could reach Chromium on a dark screen.
+        """
         log.info("Screen OFF requested")
+
+        # Save brightness for potential restore-to-last
+        current = self.get_brightness()
+        if current > 0:
+            self._pre_off_brightness = current
+
+        # Grab input BEFORE turning off display (eliminates race window)
+        if TOUCH_WAKE:
+            TOUCH_WAKE.grab()
+
+        ok = self._screen_off_hw()
+        if ok:
+            self._screen_off = True
+        else:
+            # Failed to turn off — release grab so user isn't locked out
+            if TOUCH_WAKE:
+                TOUCH_WAKE.ungrab()
+        return ok
+
+    def _screen_off_hw(self) -> bool:
+        """Hardware screen-off (backlight / compositor)."""
         try:
-            # Backlight off via sysfs (immediate, works on all backends)
             if self.backlight_path:
                 Path(f"{self.backlight_path}/bl_power").write_text("1")
                 return True
@@ -183,50 +406,91 @@ class DisplayBackend:
                     ["wlr-randr", "--output", DISPLAY_OUT, "--off"]
                 )
             else:
-                # X11: use xrandr, fall back to tvservice (older Pi OS)
-                ok = self._run_as_kiosk(["xrandr", "--display", X_DISPLAY, "--output", "HDMI-1", "--off"])
+                ok = self._run_as_kiosk(
+                    ["xrandr", "--display", X_DISPLAY, "--output", "HDMI-1", "--off"]
+                )
                 if not ok:
                     ok = self._run_as_kiosk(["tvservice", "-o"])
                 return ok
         except Exception as e:
-            log.error(f"screen_off error: {e}")
+            log.error(f"screen_off_hw error: {e}")
             return False
 
     def screen_on(self) -> bool:
-        """Turn the display back on."""
-        log.info("Screen ON requested")
+        """
+        Turn the display back on.
+        Called by external clients (HA automations, etc.).
+        Releases the grab if held — the touch-wake monitor handles its own
+        ungrab when it initiates the wake, but external calls must also release.
+        """
+        log.info("Screen ON requested (external)")
+
+        # Release grab if held (HA automation waking the screen)
+        if TOUCH_WAKE and TOUCH_WAKE.is_grabbed:
+            TOUCH_WAKE.ungrab()
+
+        ok = self.screen_on_internal()
+        if ok:
+            self._screen_off = False
+        return ok
+
+    def screen_on_internal(self) -> bool:
+        """
+        Hardware screen-on. Called by both screen_on() and the touch-wake
+        monitor's _do_wake(). Does NOT touch the grab — caller manages that.
+        """
         try:
             if self.backlight_path:
                 Path(f"{self.backlight_path}/bl_power").write_text("0")
+                self._screen_off = False
                 return True
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
-                return self._run_as_kiosk(
+                ok = self._run_as_kiosk(
                     ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
                 )
             else:
-                ok = self._run_as_kiosk(["xrandr", "--display", X_DISPLAY, "--output", "HDMI-1", "--auto"])
+                ok = self._run_as_kiosk(
+                    ["xrandr", "--display", X_DISPLAY, "--output", "HDMI-1", "--auto"]
+                )
                 if not ok:
                     ok = self._run_as_kiosk(["tvservice", "-p"])
-                return ok
+
+            if ok:
+                self._screen_off = False
+            return ok
         except Exception as e:
-            log.error(f"screen_on error: {e}")
+            log.error(f"screen_on_internal error: {e}")
             return False
 
     def status(self) -> dict:
         return {
             "backend":    self.type,
             "brightness": self.get_brightness(),
+            "screen":     "off" if self._screen_off else "on",
             "output":     DISPLAY_OUT,
             "compositor": COMPOSITOR,
+            "touch_wake": ENABLE_TOUCH_TO_WAKE,
         }
+
+
+# =============================================================================
+#  Initialise singletons
+# =============================================================================
+DISPLAY = DisplayBackend()
+
+TOUCH_WAKE: TouchWakeMonitor | None = None
+if ENABLE_TOUCH_TO_WAKE:
+    TOUCH_WAKE = TouchWakeMonitor(
+        wake_brightness=TOUCH_WAKE_BRIGHTNESS,
+        swallow_ms=TOUCH_WAKE_SWALLOW_MS,
+    )
+    TOUCH_WAKE._display = DISPLAY   # back-reference for _do_wake()
 
 
 # =============================================================================
 #  HTTP request handler
 # =============================================================================
-DISPLAY = DisplayBackend()
-
 class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -260,6 +524,12 @@ class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self._send_json(200, {"brightness": b})
 
+        elif path == "/screen/state":
+            self._send_json(200, {
+                "screen":     "off" if DISPLAY._screen_off else "on",
+                "touch_grab": TOUCH_WAKE.is_grabbed if TOUCH_WAKE else False,
+            })
+
         elif path == "/status":
             self._send_json(200, DISPLAY.status())
 
@@ -281,7 +551,6 @@ class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
                 pass
 
         if path == "/brightness":
-            # Accept value from query string or JSON body
             raw = params.get("value", [body.get("value", None)])[0]
             if raw is None:
                 self._send_error("Missing 'value' parameter (0-100)")
@@ -298,7 +567,11 @@ class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == "/screen/off":
             if DISPLAY.screen_off():
-                self._send_json(200, {"screen": "off", "ok": True})
+                self._send_json(200, {
+                    "screen":     "off",
+                    "ok":         True,
+                    "touch_grab": TOUCH_WAKE.is_grabbed if TOUCH_WAKE else False,
+                })
             else:
                 self._send_error("Failed to turn screen off", 503)
 
@@ -319,6 +592,7 @@ if __name__ == "__main__":
     log.info(f"Kiosk display API starting on port {PORT}")
     log.info(f"Display backend: {DISPLAY.type}")
     log.info(f"Compositor: {COMPOSITOR} | Output: {DISPLAY_OUT}")
+    log.info(f"Touch-to-wake: {'enabled' if ENABLE_TOUCH_TO_WAKE else 'disabled'}")
 
     server = http.server.HTTPServer(("0.0.0.0", PORT), KioskDisplayHandler)
     log.info(f"Listening on http://0.0.0.0:{PORT}")
@@ -326,4 +600,6 @@ if __name__ == "__main__":
         server.serve_forever()
     except KeyboardInterrupt:
         log.info("Shutting down.")
+        if TOUCH_WAKE:
+            TOUCH_WAKE.stop()
         server.shutdown()

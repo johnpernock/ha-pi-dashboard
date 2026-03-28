@@ -139,6 +139,9 @@ If no `kiosk.conf` exists the script runs entirely from its built-in defaults, s
 | `BROWSER_MOD_ID` | `""` | browser_mod Browser ID pre-seeded into localStorage. Use a descriptive name like `kiosk-living-room`. Auto-generates from Pi serial if blank. |
 | `WAVESHARE_10DP` | `false` | Auto-configure resolution and DDC/CI for the Waveshare 10.1DP-CAPLCD display |
 | `ENABLE_PULL_TO_REFRESH` | `true` | Pull-down-to-refresh touch gesture in Chromium. Set `false` on wall-mounted displays to prevent accidental page reloads |
+| `ENABLE_TOUCH_TO_WAKE` | `false` | Wake screen on tap when backlight is off. Uses kernel-level evdev grab — Chromium receives zero touch events while dark, preventing accidental triggers. Requires `ENABLE_DISPLAY_API=true` |
+| `TOUCH_WAKE_BRIGHTNESS` | `last` | Brightness to restore on touch-wake: `last` restores pre-off level, or `1`–`100` for a fixed value |
+| `TOUCH_WAKE_SWALLOW_MS` | `300` | Extra milliseconds to absorb touch events after waking (covers slow lift-offs). The wake tap itself is always swallowed. Set `0` to disable |
 
 ---
 
@@ -854,6 +857,69 @@ In the Browser Mod panel, confirm the Register toggle is on for the kiosk. Witho
 
 **Check 7 — browser_mod interaction icon not visible:**
 The interaction icon (small circle, bottom-right of HA) signals that browser_mod needs a user gesture before it can play audio/video. In kiosk mode with `--kiosk` the browser chrome is hidden but the HA page content still shows. If you can't see or click the icon, rename the browser ID from the HA Browser Mod panel instead — that doesn't require any interaction on the kiosk display.
+
+
+---
+
+## Touch-to-wake
+
+When `ENABLE_TOUCH_TO_WAKE=true`, tapping a dark screen turns the backlight back on without triggering anything on the dashboard.
+
+### How it works
+
+The display API uses the Linux `evdev` subsystem to hold an **exclusive kernel-level grab** on the touchscreen input device while the screen is off. At the OS level this means Chromium receives absolutely zero touch events — there is no race condition, no JavaScript required, and no risk of accidentally triggering dashboard elements.
+
+When a tap is detected:
+1. The API reads and discards the wake event
+2. The backlight turns on
+3. Brightness is restored (`last` = whatever it was before screen-off)
+4. Events are drained for `TOUCH_WAKE_SWALLOW_MS` (default 300ms) to absorb any follow-on events from the same gesture
+5. The grab is released — all subsequent touches reach Chromium normally
+
+### Setup
+
+```bash
+# In kiosk.conf:
+ENABLE_DISPLAY_API=true        # required
+ENABLE_TOUCH_TO_WAKE=true
+TOUCH_WAKE_BRIGHTNESS=last     # or a fixed value 1-100
+TOUCH_WAKE_SWALLOW_MS=300      # ms to absorb events after waking
+
+# Re-run setup to apply:
+sudo bash kiosk-setup.sh --update
+```
+
+`python3-evdev` is installed automatically when `ENABLE_TOUCH_TO_WAKE=true`.
+
+### API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/screen/state` | GET | `{"screen":"on"|"off", "touch_grab":bool}` |
+| `/screen/off` | POST | Grabs input then kills backlight |
+| `/screen/on` | POST | Releases grab then restores backlight |
+
+The `/screen/off` response now includes `touch_grab: true` when the grab is active.
+
+### Troubleshooting
+
+**Touchscreen not found at startup:**
+```bash
+# List input devices and find your touchscreen
+sudo evtest
+# Note the device name, then add to /etc/kiosk-display.conf:
+# touch_device = /dev/input/event2
+sudo systemctl restart kiosk-display-api.service
+sudo journalctl -u kiosk-display-api.service | grep -i touch
+```
+
+**Screen wakes but tap still triggers dashboard:**
+Increase `TOUCH_WAKE_SWALLOW_MS` to 500 and re-run `--update`.
+
+**Screen turns off but grab fails:**
+Check that the API service runs as root (`User=root` in the systemd unit) — evdev grab requires access to `/dev/input/event*`.
+
+---
 
 ### Display API not responding
 

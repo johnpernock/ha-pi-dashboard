@@ -118,6 +118,24 @@ WAVESHARE_10DP=false
 # preventing accidental refreshes on wall-mounted displays.
 ENABLE_PULL_TO_REFRESH=true
 
+# Touch-to-wake: turn the screen back on when someone taps while the backlight
+# is off. Uses kernel-level evdev input grab — Chromium receives zero events
+# while the screen is dark, preventing accidental dashboard triggers. The first
+# tap wakes the screen; all subsequent taps behave normally.
+# Requires: ENABLE_DISPLAY_API=true and python3-evdev installed.
+ENABLE_TOUCH_TO_WAKE=false
+
+# Brightness to restore after a touch-wake event.
+#   last  — restore whatever brightness was set before screen-off (default)
+#   1-100 — always restore to this specific brightness level
+TOUCH_WAKE_BRIGHTNESS=last
+
+# Milliseconds to absorb touch events after waking.
+# The wake tap itself is always swallowed. This adds an extra window to
+# absorb any follow-on events from the same gesture (e.g. a slow lift-off).
+# 300ms is a good default. Set to 0 to disable the swallow window entirely.
+TOUCH_WAKE_SWALLOW_MS=300
+
 # =============================================================================
 #  HOME ASSISTANT AUTO-LOGIN (optional)
 # =============================================================================
@@ -1993,7 +2011,16 @@ _install_display_api() {
     # Install ddcutil if not present (needed for HDMI DDC/CI brightness control)
     if ! command -v ddcutil &>/dev/null; then
         log "Installing ddcutil (HDMI DDC/CI brightness control)..."
-        apt-get install -y -qq ddcutil 2>/dev/null ||             warn "ddcutil not available in repos — HDMI DDC/CI will be unavailable."
+        apt-get install -y -qq ddcutil 2>/dev/null || \
+            warn "ddcutil not available in repos — HDMI DDC/CI will be unavailable."
+    fi
+
+    # Install python3-evdev if touch-to-wake is enabled
+    if $ENABLE_TOUCH_TO_WAKE; then
+        log "Installing python3-evdev for touch-to-wake support..."
+        apt-get install -y -qq python3-evdev 2>/dev/null || \
+            pip install evdev --break-system-packages -q 2>/dev/null || \
+            warn "python3-evdev not available — touch-to-wake will be disabled at runtime."
     fi
 
     # Install the API script
@@ -2014,13 +2041,16 @@ _install_display_api() {
     # Write display config file (read by the API at runtime)
     cat > /etc/kiosk-display.conf << DISPLAYCONF
 [display]
-port         = $DISPLAY_API_PORT
-compositor   = $COMPOSITOR
-output       = $DISPLAY_OUTPUT
-wayland_socket = /run/user/$(id -u "$KIOSK_USER")/wayland-0
-x_display    = :0
-kiosk_user   = $KIOSK_USER
-kiosk_uid    = $(id -u "$KIOSK_USER")
+port             = $DISPLAY_API_PORT
+compositor       = $COMPOSITOR
+output           = $DISPLAY_OUTPUT
+wayland_socket   = /run/user/$(id -u "$KIOSK_USER")/wayland-0
+x_display        = :0
+kiosk_user       = $KIOSK_USER
+kiosk_uid        = $(id -u "$KIOSK_USER")
+touch_to_wake    = $ENABLE_TOUCH_TO_WAKE
+wake_brightness  = $TOUCH_WAKE_BRIGHTNESS
+wake_swallow_ms  = $TOUCH_WAKE_SWALLOW_MS
 DISPLAYCONF
     log "Display config written → /etc/kiosk-display.conf"
 
