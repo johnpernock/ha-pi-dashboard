@@ -1459,7 +1459,7 @@ else
 fi)
 $(if [[ -n "$DISPLAY_RESOLUTION" ]]; then
     echo "sleep 1"
-    echo "wlr-randr --output $DISPLAY_OUTPUT --mode $DISPLAY_RESOLUTION"
+    echo "wlr-randr --output $DISPLAY_OUTPUT --custom-mode $DISPLAY_RESOLUTION"
 fi)
 
 # Wait up to 30s for URL to be reachable before launching
