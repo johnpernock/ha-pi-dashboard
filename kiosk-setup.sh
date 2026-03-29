@@ -1853,7 +1853,7 @@ _setup_ha_autologin() {
       // Dynamic: read BrowserID from THIS page's own URL first so one
       // wrapper file serves all kiosks. Each Pi points to:
       //   /local/kiosk-ha-login.html?BrowserID=kiosk-front-door
-      //   /local/kiosk-ha-login.html?BrowserID=kiosk-garage
+      //   /local/kiosk-ha-login.html?BrowserID=kiosk-family-room
       // Fallback to the hardcoded value baked in at install time.
       var FALLBACK_BROWSER_MOD_ID = "${BROWSER_MOD_ID}";
       var urlParams = new URLSearchParams(window.location.search);

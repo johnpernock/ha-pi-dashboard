@@ -151,7 +151,7 @@ The implementation uses kernel-level `evdev` input grabbing via Python's `evdev`
 
 - **Dynamic Browser ID — one wrapper file serves all kiosks** — `kiosk-ha-login.html` now reads the `BrowserID` URL parameter from its own URL first, falling back to the value baked in at install time. This means the single file in `/config/www/` on the HA server works for every kiosk display without conflict. Each Pi's autostart now points to:
   `http://HA_IP:8123/local/kiosk-ha-login.html?BrowserID=kiosk-front-door`
-  `http://HA_IP:8123/local/kiosk-ha-login.html?BrowserID=kiosk-garage`
+  `http://HA_IP:8123/local/kiosk-ha-login.html?BrowserID=kiosk-family-room`
 - **`HA_WRAPPER_URL` includes `?BrowserID=` when browser_mod is enabled** — the URL written to the autostart and install marker now includes the BrowserID parameter automatically. No manual URL editing needed.
 
 ---
