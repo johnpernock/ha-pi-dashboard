@@ -424,6 +424,12 @@ class DisplayBackend:
                 return True
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
+                if SCREEN_ON_MODE:
+                    # This display cannot recover from --off (HDMI bridge limitation).
+                    # Use gamma=0.01 instead — visually identical to off, always recoverable.
+                    return self._run_as_kiosk(
+                        ["wlr-randr", "--output", DISPLAY_OUT, "--brightness", "0.01"]
+                    )
                 return self._run_as_kiosk(
                     ["wlr-randr", "--output", DISPLAY_OUT, "--off"]
                 )
@@ -469,15 +475,9 @@ class DisplayBackend:
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
                 if SCREEN_ON_MODE:
-                    # Step 1: re-enable output with its native preferred mode
-                    self._run_as_kiosk(
-                        ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
-                    )
-                    import time as _time; _time.sleep(0.5)
-                    # Step 2: switch to the desired custom mode
+                    # Output was never disabled — just restore gamma to full brightness
                     ok = self._run_as_kiosk(
-                        ["wlr-randr", "--output", DISPLAY_OUT,
-                         "--custom-mode", SCREEN_ON_MODE]
+                        ["wlr-randr", "--output", DISPLAY_OUT, "--brightness", "1.0"]
                     )
                 else:
                     ok = self._run_as_kiosk(
