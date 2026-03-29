@@ -78,6 +78,9 @@ DISPLAY_OUTPUT="HDMI-A-1"
 # Force a specific resolution (optional). Leave empty for display preferred.
 # Example: DISPLAY_RESOLUTION="1920x1200@59.884"  Run `wlr-randr` to list modes.
 DISPLAY_RESOLUTION=""
+# Set to false for displays that cannot be turned off/on via software
+# (e.g. some HDMI bridge chips). Kiosk will stay always-on.
+ENABLE_SCREEN_CONTROL=true
 
 # Auto-reload page every N seconds (0 = disabled)
 AUTO_RELOAD_SECONDS=0
@@ -2066,8 +2069,7 @@ kiosk_uid        = $(id -u "$KIOSK_USER")
 touch_to_wake       = $ENABLE_TOUCH_TO_WAKE
 wake_brightness     = $TOUCH_WAKE_BRIGHTNESS
 wake_swallow_ms     = $TOUCH_WAKE_SWALLOW_MS
-screen_on_mode      = $DISPLAY_RESOLUTION
-software_brightness = $(if [[ -n "$DISPLAY_RESOLUTION" ]] && [[ "$WAVESHARE_10DP" != "true" ]]; then echo "true"; else echo "false"; fi)
+screen_control      = $ENABLE_SCREEN_CONTROL
 DISPLAYCONF
     log "Display config written → /etc/kiosk-display.conf"
 

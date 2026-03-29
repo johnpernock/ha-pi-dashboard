@@ -60,11 +60,9 @@ KIOSK_UID     = int(config.get("display", "kiosk_uid",       fallback="1000"))
 # Touch-to-wake configuration
 ENABLE_TOUCH_TO_WAKE    = config.getboolean("display", "touch_to_wake",   fallback=False)
 _wake_bri_raw           = config.get("display", "wake_brightness",        fallback="last").strip()
-SCREEN_ON_MODE          = config.get("display", "screen_on_mode",         fallback="").strip()
-# If set, wlr-randr uses --custom-mode MODE instead of --on (needed for
-# displays that require a specific mode to be re-applied after --off)
-SOFTWARE_BRIGHTNESS     = config.getboolean("display", "software_brightness", fallback=False)
-# Use wlr-randr gamma for brightness on displays without DDC/CI or backlight
+SCREEN_CONTROL          = config.getboolean("display", "screen_control", fallback=True)
+# Set screen_control=false for displays that cannot reliably be turned off/on
+# via software (e.g. some HDMI bridge chips). Screen off/on calls become no-ops.
 TOUCH_WAKE_BRIGHTNESS   = _wake_bri_raw if _wake_bri_raw == "last" else int(_wake_bri_raw)
 TOUCH_WAKE_SWALLOW_MS   = int(config.get("display", "wake_swallow_ms",    fallback="300"))
 
@@ -424,12 +422,9 @@ class DisplayBackend:
                 return True
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
-                if SCREEN_ON_MODE:
-                    # This display cannot recover from --off (HDMI bridge limitation).
-                    # Use gamma=0.01 instead — visually identical to off, always recoverable.
-                    return self._run_as_kiosk(
-                        ["wlr-randr", "--output", DISPLAY_OUT, "--brightness", "0.01"]
-                    )
+                if not SCREEN_CONTROL:
+                    log.info("screen_control=false — screen off skipped")
+                    return True
                 return self._run_as_kiosk(
                     ["wlr-randr", "--output", DISPLAY_OUT, "--off"]
                 )
@@ -474,15 +469,13 @@ class DisplayBackend:
                 return True
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
-                if SCREEN_ON_MODE:
-                    # Output was never disabled — just restore gamma to full brightness
-                    ok = self._run_as_kiosk(
-                        ["wlr-randr", "--output", DISPLAY_OUT, "--brightness", "1.0"]
-                    )
-                else:
-                    ok = self._run_as_kiosk(
-                        ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
-                    )
+                if not SCREEN_CONTROL:
+                    log.info("screen_control=false — screen on skipped")
+                    self._screen_off = False
+                    return True
+                ok = self._run_as_kiosk(
+                    ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
+                )
             else:
                 ok = self._run_as_kiosk(
                     ["xrandr", "--display", X_DISPLAY, "--output", "HDMI-1", "--auto"]
