@@ -2087,6 +2087,9 @@ StandardOutput=journal
 StandardError=journal
 # Run as root so it can write to sysfs backlight nodes
 User=root
+# Wayland env vars needed for wlr-randr commands run as kiosk user
+Environment="WAYLAND_DISPLAY=wayland-0"
+Environment="XDG_RUNTIME_DIR=/run/user/$(id -u $KIOSK_USER)"
 
 [Install]
 WantedBy=multi-user.target
