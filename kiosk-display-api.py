@@ -469,9 +469,15 @@ class DisplayBackend:
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
                 if SCREEN_ON_MODE:
+                    # Step 1: re-enable output with its native preferred mode
+                    self._run_as_kiosk(
+                        ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
+                    )
+                    import time as _time; _time.sleep(0.5)
+                    # Step 2: switch to the desired custom mode
                     ok = self._run_as_kiosk(
                         ["wlr-randr", "--output", DISPLAY_OUT,
-                         "--on", "--custom-mode", SCREEN_ON_MODE]
+                         "--custom-mode", SCREEN_ON_MODE]
                     )
                 else:
                     ok = self._run_as_kiosk(
