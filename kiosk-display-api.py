@@ -60,6 +60,11 @@ KIOSK_UID     = int(config.get("display", "kiosk_uid",       fallback="1000"))
 # Touch-to-wake configuration
 ENABLE_TOUCH_TO_WAKE    = config.getboolean("display", "touch_to_wake",   fallback=False)
 _wake_bri_raw           = config.get("display", "wake_brightness",        fallback="last").strip()
+SCREEN_ON_MODE          = config.get("display", "screen_on_mode",         fallback="").strip()
+# If set, wlr-randr uses --custom-mode MODE instead of --on (needed for
+# displays that require a specific mode to be re-applied after --off)
+SOFTWARE_BRIGHTNESS     = config.getboolean("display", "software_brightness", fallback=False)
+# Use wlr-randr gamma for brightness on displays without DDC/CI or backlight
 TOUCH_WAKE_BRIGHTNESS   = _wake_bri_raw if _wake_bri_raw == "last" else int(_wake_bri_raw)
 TOUCH_WAKE_SWALLOW_MS   = int(config.get("display", "wake_swallow_ms",    fallback="300"))
 
@@ -286,6 +291,7 @@ class DisplayBackend:
         self.ddc_display_id     = None
         self._screen_off        = False       # track screen state
         self._pre_off_brightness = 80         # brightness before last screen-off
+        self._sw_brightness      = 80         # last software brightness value
         self._detect()
 
     def _detect(self):
@@ -319,6 +325,8 @@ class DisplayBackend:
     # ── Brightness ────────────────────────────────────────────────────────────
     def get_brightness(self) -> int:
         """Return current brightness as 0-100."""
+        if SOFTWARE_BRIGHTNESS and not self.backlight_path and not self.ddc_ok:
+            return getattr(self, "_sw_brightness", 80)
         try:
             if self.type == "backlight":
                 actual  = int(Path(f"{self.backlight_path}/brightness").read_text().strip())
@@ -460,9 +468,15 @@ class DisplayBackend:
                 return True
 
             if COMPOSITOR.lower() in ("wayland", "wayland + labwc"):
-                ok = self._run_as_kiosk(
-                    ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
-                )
+                if SCREEN_ON_MODE:
+                    ok = self._run_as_kiosk(
+                        ["wlr-randr", "--output", DISPLAY_OUT,
+                         "--custom-mode", SCREEN_ON_MODE]
+                    )
+                else:
+                    ok = self._run_as_kiosk(
+                        ["wlr-randr", "--output", DISPLAY_OUT, "--on"]
+                    )
             else:
                 ok = self._run_as_kiosk(
                     ["xrandr", "--display", X_DISPLAY, "--output", "HDMI-1", "--auto"]

@@ -2063,9 +2063,11 @@ wayland_socket   = /run/user/$(id -u "$KIOSK_USER")/wayland-0
 x_display        = :0
 kiosk_user       = $KIOSK_USER
 kiosk_uid        = $(id -u "$KIOSK_USER")
-touch_to_wake    = $ENABLE_TOUCH_TO_WAKE
-wake_brightness  = $TOUCH_WAKE_BRIGHTNESS
-wake_swallow_ms  = $TOUCH_WAKE_SWALLOW_MS
+touch_to_wake       = $ENABLE_TOUCH_TO_WAKE
+wake_brightness     = $TOUCH_WAKE_BRIGHTNESS
+wake_swallow_ms     = $TOUCH_WAKE_SWALLOW_MS
+screen_on_mode      = $DISPLAY_RESOLUTION
+software_brightness = $(if [[ -n "$DISPLAY_RESOLUTION" ]] && [[ "$WAVESHARE_10DP" != "true" ]]; then echo "true"; else echo "false"; fi)
 DISPLAYCONF
     log "Display config written → /etc/kiosk-display.conf"
 
