@@ -75,6 +75,10 @@ DISPLAY_TRANSFORM="normal"
 # Common: HDMI-A-1, HDMI-A-2, DSI-1 (official Pi touchscreen)
 DISPLAY_OUTPUT="HDMI-A-1"
 
+# Force a specific resolution (optional). Leave empty for display preferred.
+# Example: DISPLAY_RESOLUTION="1920x1200@59.884"  Run `wlr-randr` to list modes.
+DISPLAY_RESOLUTION=""
+
 # Auto-reload page every N seconds (0 = disabled)
 AUTO_RELOAD_SECONDS=0
 
@@ -1444,11 +1448,15 @@ swaybg -m solid_color -c 000000 &
 # On-screen keyboard
 $OSK_LINE
 
-# Display rotation
+# Display rotation / resolution
 $(if [[ "$DISPLAY_TRANSFORM" != "normal" ]]; then
     echo "wlr-randr --output $DISPLAY_OUTPUT --transform $DISPLAY_TRANSFORM"
 else
     echo "# wlr-randr --output $DISPLAY_OUTPUT --transform 90   # uncomment to rotate"
+fi)
+$(if [[ -n "$DISPLAY_RESOLUTION" ]]; then
+    echo "sleep 1"
+    echo "wlr-randr --output $DISPLAY_OUTPUT --mode $DISPLAY_RESOLUTION"
 fi)
 
 # Wait up to 30s for URL to be reachable before launching
@@ -1728,6 +1736,7 @@ DISPLAY_API_PORT=$DISPLAY_API_PORT
 BROWSER_MOD=$ENABLE_BROWSER_MOD
 BROWSER_MOD_ID=$BROWSER_MOD_ID
 WAVESHARE_10DP=$WAVESHARE_10DP
+DISPLAY_RESOLUTION=$DISPLAY_RESOLUTION
 INSTALLED_PKGS=${INSTALLED_PKGS[*]}
 EOF
 log "Install marker → $INSTALL_MARKER"
