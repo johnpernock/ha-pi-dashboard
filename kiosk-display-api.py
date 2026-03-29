@@ -86,7 +86,7 @@ log = logging.getLogger("kiosk-display")
 #  literally zero events. No race conditions, no JavaScript required.
 #
 #  Flow:
-#    screen_off() → grab touchscreen → DDC off
+#    screen_off() → grab touchscreen → drain 600ms (absorbs button lift) → DDC off
 #    user taps    → our thread reads the event (Chromium sees nothing)
 #                 → drain remaining events for SWALLOW_MS
 #                 → ungrab → restore brightness → screen on
@@ -243,6 +243,19 @@ class TouchWakeMonitor:
                 continue
 
             try:
+                # Drain events for 600ms after grab activates.
+                # This absorbs the finger-lift from whatever button/tap
+                # triggered the screen-off, preventing an immediate re-wake.
+                drain_until = time.monotonic() + 0.6
+                while time.monotonic() < drain_until:
+                    remaining = max(0.001, drain_until - time.monotonic())
+                    try:
+                        r, _, _ = select.select([self._device.fd], [], [], remaining)
+                        if r:
+                            self._device.read()
+                    except Exception:
+                        break
+
                 for event in self._device.read_loop():
                     if not self._grabbed:
                         break
