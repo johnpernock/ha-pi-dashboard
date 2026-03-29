@@ -471,7 +471,7 @@ class DisplayBackend:
                 if SCREEN_ON_MODE:
                     ok = self._run_as_kiosk(
                         ["wlr-randr", "--output", DISPLAY_OUT,
-                         "--custom-mode", SCREEN_ON_MODE]
+                         "--on", "--custom-mode", SCREEN_ON_MODE]
                     )
                 else:
                     ok = self._run_as_kiosk(
