@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.18.0] — 2026-03-29
+
+### Added
+
+**`screen_control` config option** — for displays that cannot be turned off/on
+via software (e.g. some HDMI bridge chips like the Alvedon/generic HDMI adapter).
+When `ENABLE_SCREEN_CONTROL=false` in `kiosk.conf`, screen off/on calls return
+success without doing anything. The display stays always-on.
+
+**`ENABLE_SCREEN_CONTROL`** added to `kiosk.conf` template (default: `true`).
+
+**`DISPLAY_RESOLUTION`** config option now documented — used to force a specific
+output mode via `wlr-randr --custom-mode` at compositor startup. Useful for
+displays that don't advertise their best resolution as "preferred" in EDID.
+
+### Fixed
+
+**Touch-to-wake** — added 600ms post-grab drain after screen turns off. Absorbs
+the finger-lift from the button press that triggered screen-off, preventing an
+immediate accidental re-wake.
+
+**Systemd service** — `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` are now written
+to the service unit environment so `wlr-randr` commands run correctly when
+invoked via `sudo -u kiosk_user`.
+
+---
+
 ## [1.17.0] — 2026-03-28
 
 ### Security hardening — display API + setup script
