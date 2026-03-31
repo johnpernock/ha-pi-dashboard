@@ -37,6 +37,12 @@
 # Use 0.0.0.0 when HA runs on a separate machine (most setups).
 # DISPLAY_API_BIND=0.0.0.0
 
+# Set false for displays that don't support software screen on/off or brightness
+# (e.g. portable HDMI displays, some USB-C monitors). The API still runs for
+# health/status endpoints, but /screen/on, /screen/off, and /brightness become
+# no-ops. Leave true for wall panels with sysfs backlight or DDC/CI support.
+# ENABLE_SCREEN_CONTROL=true
+
 # ── Waveshare 10.1DP-CAPLCD display ──────────────────────────────────────────
 # WAVESHARE_10DP=true
 
