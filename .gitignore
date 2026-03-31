@@ -25,3 +25,5 @@ temp/
 # Local config overrides — never commit personal settings
 kiosk.conf
 
+# Claude Code session files
+.claude/
