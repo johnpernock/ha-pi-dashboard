@@ -135,6 +135,7 @@ If no `kiosk.conf` exists the script runs entirely from its built-in defaults, s
 | `HA_DASHBOARD_PATH` | `/lovelace/0` | Dashboard path to open after login |
 | `ENABLE_DISPLAY_API` | `false` | Install the display brightness/power HTTP API |
 | `DISPLAY_API_PORT` | `2701` | Port the display API listens on |
+| `ENABLE_SCREEN_CONTROL` | `true` | Set `false` for displays that don't support software screen on/off or brightness (e.g. portable HDMI monitors). The API still runs for health/status but screen and brightness endpoints become no-ops |
 | `ENABLE_BROWSER_MOD` | `false` | Enable browser_mod compatibility (persistent Chromium profile, removes `--incognito`) |
 | `BROWSER_MOD_ID` | `""` | browser_mod Browser ID pre-seeded into localStorage. Use a descriptive name like `kiosk-living-room`. Auto-generates from Pi serial if blank. |
 | `WAVESHARE_10DP` | `false` | Auto-configure resolution and DDC/CI for the Waveshare 10.1DP-CAPLCD display |
