@@ -323,7 +323,7 @@ class DisplayBackend:
     # ── Brightness ────────────────────────────────────────────────────────────
     def get_brightness(self) -> int:
         """Return current brightness as 0-100."""
-        if SOFTWARE_BRIGHTNESS and not self.backlight_path and not self.ddc_ok:
+        if not self.backlight_path and self.type == "none":
             return getattr(self, "_sw_brightness", 80)
         try:
             if self.type == "backlight":
