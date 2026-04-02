@@ -101,6 +101,9 @@ DISPLAY_API_PORT=2701
 # Set to 127.0.0.1 to restrict to localhost only — HA must be on the same host.
 # For most setups 0.0.0.0 is correct since HA runs on a separate machine.
 DISPLAY_API_BIND=0.0.0.0
+# Optional static bearer token for POST endpoints (empty = no auth).
+# Set a random string here and add the matching header to HA REST commands.
+DISPLAY_API_TOKEN=""
 
 # Enable browser_mod (HACS) compatibility.
 # browser_mod registers Chromium as a HA device, enabling popups, navigation,
@@ -644,6 +647,16 @@ if [[ "$1" == "--update" ]]; then
     if [[ -f "$SCRIPT_DIR/kiosk.conf" ]]; then
         source "$SCRIPT_DIR/kiosk.conf"
         log "Loaded kiosk.conf"
+    fi
+
+    # Update display API script if installed
+    if [[ -f "$SCRIPT_DIR/kiosk-display-api.py" ]] && systemctl is-enabled kiosk-display-api.service &>/dev/null; then
+        cp "$SCRIPT_DIR/kiosk-display-api.py" /usr/local/bin/kiosk-display-api.py
+        chmod +x /usr/local/bin/kiosk-display-api.py
+        log "Display API updated → /usr/local/bin/kiosk-display-api.py"
+        systemctl restart kiosk-display-api.service && \
+            log "kiosk-display-api.service restarted" || \
+            warn "Could not restart kiosk-display-api.service"
     fi
 
     # Restart Chromium — watchdog picks it up automatically
@@ -1705,7 +1718,19 @@ else
     RTC_ENABLED=false
 fi
 
-# ── 11. Log rotation ──────────────────────────────────────────────────────────
+# ── 11. Log rotation + SD card wear reduction ────────────────────────────────
+# Store journal in RAM (volatile) — survives until reboot, avoids SD write wear.
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/volatile.conf << 'EOF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+EOF
+systemctl restart systemd-journald 2>/dev/null || true
+log "journald: volatile (RAM-only) storage configured"
+
+# Chromium watchdog log is the only file-based log remaining; the display API
+# logs to stdout which is captured by the journal above.
 cat > /etc/logrotate.d/kiosk << 'EOF'
 $KIOSK_HOME/kiosk.log {
     weekly
@@ -2070,6 +2095,7 @@ touch_to_wake       = $ENABLE_TOUCH_TO_WAKE
 wake_brightness     = $TOUCH_WAKE_BRIGHTNESS
 wake_swallow_ms     = $TOUCH_WAKE_SWALLOW_MS
 screen_control      = $ENABLE_SCREEN_CONTROL
+api_token           = $DISPLAY_API_TOKEN
 DISPLAYCONF
     log "Display config written → /etc/kiosk-display.conf"
 
@@ -2101,18 +2127,6 @@ SVCEOF
     systemctl enable kiosk-display-api.service
     systemctl restart kiosk-display-api.service 2>/dev/null || true
     log "Display API service enabled and started (port $DISPLAY_API_PORT)"
-
-    # Log rotation for display API
-    cat > /etc/logrotate.d/kiosk-display << 'EOF'
-/var/log/kiosk-display.log {
-    weekly
-    rotate 4
-    compress
-    missingok
-    notifempty
-    create 640 root adm
-}
-EOF
 
     echo ""
     info "Display API installed. Replace KIOSK_IP and KIOSK_PORT in ha-display-config.yaml:"

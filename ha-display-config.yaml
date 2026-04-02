@@ -7,6 +7,12 @@
 #
 #  Paste each section into the matching section of your configuration.yaml,
 #  then restart HA (Developer Tools → Check Configuration → Restart).
+#
+#  API authentication (optional):
+#  If you set DISPLAY_API_TOKEN in kiosk.conf, add this to secrets.yaml:
+#    kiosk_api_bearer_token: "Bearer your-token-here"
+#  If you haven't set a token, use:
+#    kiosk_api_bearer_token: "Bearer"
 # =============================================================================
 
 
@@ -21,16 +27,22 @@ rest_command:
     method: POST
     content_type: "application/json"
     payload: '{"value": {{ brightness }}}'
+    headers:
+      Authorization: !secret kiosk_api_bearer_token
 
   # Turn display off (Pi stays running — just kills the backlight)
   kiosk_screen_off:
     url: "http://KIOSK_IP:KIOSK_PORT/screen/off"
     method: POST
+    headers:
+      Authorization: !secret kiosk_api_bearer_token
 
   # Turn display back on
   kiosk_screen_on:
     url: "http://KIOSK_IP:KIOSK_PORT/screen/on"
     method: POST
+    headers:
+      Authorization: !secret kiosk_api_bearer_token
 
 
 # =============================================================================

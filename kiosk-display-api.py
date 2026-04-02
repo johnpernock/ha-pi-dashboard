@@ -43,7 +43,6 @@ from pathlib import Path
 #  Configuration — read from /etc/kiosk-display.conf (written by kiosk-setup.sh)
 # =============================================================================
 CONFIG_FILE = "/etc/kiosk-display.conf"
-LOG_FILE    = "/var/log/kiosk-display.log"
 
 config = configparser.ConfigParser()
 config.read(CONFIG_FILE)
@@ -66,6 +65,11 @@ SCREEN_CONTROL          = config.getboolean("display", "screen_control", fallbac
 TOUCH_WAKE_BRIGHTNESS   = _wake_bri_raw if _wake_bri_raw == "last" else int(_wake_bri_raw)
 TOUCH_WAKE_SWALLOW_MS   = int(config.get("display", "wake_swallow_ms",    fallback="300"))
 
+# Optional bearer-token auth for POST endpoints.
+# Empty string = no auth (default). Set api_token in /etc/kiosk-display.conf to enable.
+# HA REST commands must then include: Authorization: "Bearer <token>"
+API_TOKEN = config.get("display", "api_token", fallback="")
+
 START_TIME = time.time()
 
 # =============================================================================
@@ -74,10 +78,7 @@ START_TIME = time.time()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("kiosk-display")
 
@@ -543,6 +544,12 @@ def _rate_check(ip: str) -> bool:
 
 class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
 
+    def _check_auth(self) -> bool:
+        """Return True if the request is authorized. GET requests are always allowed."""
+        if not API_TOKEN:
+            return True
+        return self.headers.get("Authorization", "") == f"Bearer {API_TOKEN}"
+
     def log_message(self, fmt, *args):
         log.info(f"{self.address_string()} - {fmt % args}")
 
@@ -587,6 +594,10 @@ class KioskDisplayHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(f"Unknown endpoint: {path}", 404)
 
     def do_POST(self):
+        if not self._check_auth():
+            self._send_error("Unauthorized", 401)
+            return
+
         # Rate limit — prevent rapid ddcutil spam
         client_ip = self.client_address[0]
         if not _rate_check(client_ip):
