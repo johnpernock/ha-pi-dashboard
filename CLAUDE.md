@@ -45,6 +45,13 @@ sudo bash kiosk-setup.sh --factory-reset https://your-url.com
 
 Rate limited to 20 POST calls per 10 seconds per IP. No external HTTP framework — uses Python stdlib `http.server`.
 
+**Authentication:** POST endpoints support optional bearer-token auth (`DISPLAY_API_TOKEN` in `kiosk.conf`). GET endpoints are always unauthenticated. HA `ha-display-config.yaml` POST REST commands include `Authorization: !secret kiosk_api_bearer_token`. Add to HA `secrets.yaml`:
+```yaml
+kiosk_api_bearer_token: "Bearer your-token-here"   # or just "Bearer" if no token set
+```
+
+**Logging:** Logs to stdout only (systemd journal). Setup writes `Storage=volatile` to journald — journal stays in RAM, never touches the SD card.
+
 ## Architecture
 
 ### Component Relationships
@@ -98,9 +105,10 @@ The script detects the environment and branches behavior accordingly:
 
 | Path | Purpose |
 |---|---|
-| `/var/log/kiosk.log` | Chromium watchdog loop (rotated weekly) |
-| `/var/log/kiosk-display.log` | Display API requests and events (rotated weekly) |
+| `~/kiosk.log` | Chromium watchdog loop (rotated weekly) |
 | `/etc/kiosk-installed` | Presence indicates a completed install |
 | `/etc/kiosk-display.conf` | INI config consumed by the Python API |
 | `/etc/kiosk-browser-mod-id` | browser_mod device ID |
 | `~/.config/chromium-kiosk` | Persistent Chromium profile (only when browser_mod is enabled) |
+
+> `kiosk-display-api.py` logs to stdout → systemd journal (volatile/RAM only, never written to disk). Use `journalctl -u kiosk-display-api.service -f` to follow live.

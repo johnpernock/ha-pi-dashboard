@@ -43,6 +43,15 @@
 # no-ops. Leave true for wall panels with sysfs backlight or DDC/CI support.
 # ENABLE_SCREEN_CONTROL=true
 
+# Optional static bearer token for POST endpoints (empty = no auth, default).
+# If set, HA REST commands must include: Authorization: "Bearer <token>"
+# Add to HA secrets.yaml:
+#   kiosk_api_bearer_token: "Bearer your-token-here"
+# If no token is set, use:
+#   kiosk_api_bearer_token: "Bearer"
+# Generate a token: openssl rand -hex 32
+# DISPLAY_API_TOKEN=""
+
 # ── Waveshare 10.1DP-CAPLCD display ──────────────────────────────────────────
 # WAVESHARE_10DP=true
 

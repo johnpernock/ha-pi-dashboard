@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.19.0] — 2026-04-02
+
+### Added
+
+**Bearer-token authentication** for POST endpoints (`kiosk-display-api.py`).
+- New `DISPLAY_API_TOKEN` config option in `kiosk.conf` (default: empty = no auth, backward-compatible).
+- When set, `POST /brightness`, `POST /screen/on`, `POST /screen/off` require `Authorization: Bearer <token>`.
+- GET endpoints (`/status`, `/health`, `/screen/state`, `/brightness`) remain unauthenticated — HA REST sensors unaffected.
+- `ha-display-config.yaml`: all three POST REST commands now include `Authorization: !secret kiosk_api_bearer_token`.
+- `kiosk.conf.example`: new `DISPLAY_API_TOKEN` option with format instructions.
+
+### Fixed
+
+**`--update` now also updates `kiosk-display-api.py`** — previously `--update` only restarted Chromium. If the display API script had a bug fix it wouldn't be applied until a full reinstall. Now `--update` also:
+1. Copies the updated `kiosk-display-api.py` to `/usr/local/bin/`
+2. Restarts `kiosk-display-api.service`
+
+### Changed
+
+**SD card wear reduction** (important for 24/7 devices):
+- `kiosk-display-api.py`: removed `FileHandler` — Python API logs to stdout only. systemd captures this to the journal. Each log line was previously written twice (file + journal).
+- Setup script now writes `/etc/systemd/journald.conf.d/volatile.conf` (`Storage=volatile, RuntimeMaxUse=32M`). Journal stays in RAM and is never written to the SD card.
+- Removed `/etc/logrotate.d/kiosk-display` (log file no longer created by the API).
+- `CLAUDE.md` log table updated — `/var/log/kiosk-display.log` entry removed; use `journalctl -u kiosk-display-api.service -f` for live API logs.
+
+---
+
 ## [1.18.0] — 2026-03-29
 
 ### Added
