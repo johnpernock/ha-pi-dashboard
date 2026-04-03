@@ -1294,6 +1294,29 @@ else
     warn "Skipping GPU overlay configuration — check manually."
 fi
 
+# ── 2b. Disable onboard LEDs ──────────────────────────────────────────────────
+if [[ -f "$RASPI_CONFIG_FILE" ]]; then
+    LED_ADDED=false
+    for led_param in \
+        "dtparam=act_led_trigger=none" \
+        "dtparam=act_led_activelow=off" \
+        "dtparam=pwr_led_trigger=none" \
+        "dtparam=pwr_led_activelow=off"
+    do
+        if ! grep -q "^${led_param}" "$RASPI_CONFIG_FILE"; then
+            echo "$led_param" >> "$RASPI_CONFIG_FILE"
+            LED_ADDED=true
+        fi
+    done
+    if $LED_ADDED; then
+        log "Onboard LEDs disabled in config.txt (takes effect after reboot)"
+    else
+        log "Onboard LEDs already disabled in config.txt"
+    fi
+else
+    warn "config.txt not found — skipping LED disable"
+fi
+
 # ── 3. Hardware watchdog ──────────────────────────────────────────────────────
 if $HAS_HW_WATCHDOG; then
     WATCHDOG_CONF=/etc/systemd/system.conf

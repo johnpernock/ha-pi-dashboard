@@ -92,6 +92,7 @@ sudo bash kiosk-setup.sh --enable-rtc
 | **Touch controls locked** | Pinch-to-zoom, overscroll, pull-to-refresh all disabled |
 | **Infobars suppressed** | No crash prompts, save-password bubbles, translate bar, or notifications |
 | **Wi-Fi power-save off** | Prevents random network drops |
+| **Onboard LEDs disabled** | Activity and power LEDs turned off in `config.txt` during install — takes effect after reboot |
 | **Log rotation** | `/var/log/kiosk.log` rotated weekly, 4 weeks retained |
 | **Idempotent updates** | `--update-url` and `--enable-rtc` are safe to run at any time |
 | **browser_mod** | HACS integration compatibility — switches Chromium to a persistent profile so browser_mod can register the kiosk as a HA device (enables popups, navigation, doorbell alerts, software overlay). See `ha-browser-mod-config.yaml` |
