@@ -33,6 +33,34 @@ sudo bash kiosk-setup.sh --factory-reset https://your-url.com
 
 > Flags must be passed **one at a time** — combining multiple flags in a single invocation is not supported.
 
+## Deployed hardware
+
+| Pi | IP | Display | OS | Notes |
+|----|----|---------|----|-------|
+| Pi 4 | `192.168.1.198` | HyperPixel 4 Rectangle, portrait 480×800 | Debian 13 Trixie | Upgraded in-place from Bookworm. No LightDM — labwc launched via `.bash_profile` (see below). Display API on port 2701. |
+
+### HyperPixel 4 Rectangle — kiosk.conf
+```bash
+DISPLAY_OUTPUT="DPI-1"
+DISPLAY_TRANSFORM="normal"
+ENABLE_DISPLAY_API=true
+ENABLE_SCREEN_CONTROL=true
+ENABLE_TOUCH_TO_WAKE=true
+ENABLE_PULL_TO_REFRESH=false
+```
+
+### No-LightDM workaround (Trixie, upgraded from Bookworm)
+The script warns if `lightdm.conf` is not found and skips autologin config. After running the setup, create `/home/pi/.bash_profile` to start labwc on tty1:
+```bash
+if [[ -z "$WAYLAND_DISPLAY" ]] && [[ "$(tty)" == "/dev/tty1" ]]; then
+    exec dbus-run-session labwc
+fi
+```
+Also manually install `labwc`, `swaybg`, and `wlr-randr` if they were missing from the Trixie repo at upgrade time:
+```bash
+sudo apt-get install -y labwc wlr-randr swaybg
+```
+
 ## Display API
 
 `kiosk-display-api.py` runs as a systemd service on port 2701. Endpoints:
