@@ -38,7 +38,7 @@ sudo bash kiosk-setup.sh --factory-reset https://your-url.com
 | Pi | Hostname | IP | Display | OS | Notes |
 |----|----------|----|---------|-----|-------|
 | Pi 4 | `VoicePiKitchen` | `192.168.1.153` | HyperPixel 4 Rectangle, portrait 480×800 | Debian 13 Trixie | Upgraded in-place from Bookworm. No LightDM — labwc launched via `.bash_profile` (see below). Display API on port 2701. |
-| Pi | `KioskPiDiningRoom` | `192.168.1.156` | — | — | Dining room kiosk — HA label: "Front Door" (`kiosk-front-door`) |
+| Pi | `KioskPiFrontDoor` | `192.168.1.156` | — | — | Dining room kiosk — HA label: "Front Door" (`kiosk-front-door`) |
 | Pi | `KioskPiFamilyRoom` | `192.168.1.157` | — | — | Family room kiosk — HA label: "Family Room" (`kiosk-family-room`) |
 | Pi | `KioskPiPortable` | `192.168.1.158` | — | — | Portable kiosk — reserved, not yet deployed |
 
